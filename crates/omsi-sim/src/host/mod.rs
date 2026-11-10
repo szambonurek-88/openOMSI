@@ -261,7 +261,6 @@ pub fn ambient_weather() -> Option<(f32, f32)> {
 }
 
 impl VehicleHost {
-    /// Snapshot the lengths of every trigger queue before a script tick.
     pub fn trigger_mark(&self) -> (usize, usize, usize, usize) {
         (
             self.fired_triggers.len(),
@@ -271,7 +270,6 @@ impl VehicleHost {
         )
     }
 
-    /// Remove sound triggers added after `mark` whose name satisfies `drop_if`.
     pub fn drop_triggers_since(
         &mut self,
         mark: (usize, usize, usize, usize),

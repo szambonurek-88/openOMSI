@@ -40,9 +40,12 @@ fn kept_indicator(cancel: bool, before: Option<f32>, after: Option<f32>) -> Opti
     let (before, after) = (before?.round(), after?.round());
     (!cancel && (before == 1.0 || before == 2.0) && after == 0.0).then_some(before)
 }
+
 fn is_blinker_cancel_trigger(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    n.contains("blinker") && !n.ends_with("_on") && ["sw", "aus", "cancel", "schalter", "lever", "stalk"].iter().any(|k| n.contains(k))
+    let n = name.trim().to_ascii_lowercase();
+    let n = n.strip_prefix("ev_").unwrap_or(&n);
+    let n = n.strip_prefix("lights_").unwrap_or(n);
+    matches!(n, "blinker_sw" | "blinker_swoff" | "blinker_sw_off" | "blinker_sw_aus" | "blinker_aus" | "blinker_cancel")
 }
 
 /// Whether the view follows the steering (the setting on): only from the driver's seat as the
@@ -1270,7 +1273,16 @@ mod kept_indicator_tests {
         assert_eq!(kept_indicator(false, Some(1.0), Some(2.0)), None);
         assert_eq!(kept_indicator(false, Some(0.0), Some(0.0)), None);
         assert_eq!(kept_indicator(false, None, Some(0.0)), None);
-        assert!(super::is_blinker_cancel_trigger("ev_lights_blinker_sw_off") && super::is_blinker_cancel_trigger("ev_blinker_aus") && !super::is_blinker_cancel_trigger("ev_lights_blinker_off") && !super::is_blinker_cancel_trigger("ev_lights_blinker_sw_on"));
+    }
+
+    #[test]
+    fn only_known_lever_snap_triggers_are_suppressed() {
+        for t in ["ev_lights_blinker_sw", "ev_lights_blinker_swoff", "ev_lights_blinker_sw_off", "ev_blinker_aus", "blinker_cancel"] {
+            assert!(super::is_blinker_cancel_trigger(t), "{t}");
+        }
+        for k in ["ev_lights_blinker_off", "ev_lights_blinker_sw_on", "ev_warnblinker_schalter", "ev_blinker_relais_aus"] {
+            assert!(!super::is_blinker_cancel_trigger(k), "{k}");
+        }
     }
 }
 
