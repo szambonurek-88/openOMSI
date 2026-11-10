@@ -40,6 +40,10 @@ fn kept_indicator(cancel: bool, before: Option<f32>, after: Option<f32>) -> Opti
     let (before, after) = (before?.round(), after?.round());
     (!cancel && (before == 1.0 || before == 2.0) && after == 0.0).then_some(before)
 }
+fn is_blinker_cancel_trigger(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.contains("blinker") && !n.ends_with("_on") && ["sw", "aus", "cancel", "schalter", "lever", "stalk"].iter().any(|k| n.contains(k))
+}
 
 /// Whether the view follows the steering (the setting on): only from the driver's seat as the
 /// bus places it, its standard camera - a look at the ticket printer or out of the side
@@ -1058,10 +1062,11 @@ impl Player {
                 _ => self.axes.steering,
             },
         });
-        let lever = self.vehicle.var("lights_sw_blinker");
+        let (lever, mark) = (self.vehicle.var("lights_sw_blinker"), self.vehicle.host.trigger_mark());
         self.vehicle.update(dt);
         if let Some(keep) = kept_indicator(self.blinker_cancel, lever, self.vehicle.var("lights_sw_blinker")) {
             self.vehicle.set_var("lights_sw_blinker", keep);
+            self.vehicle.host.drop_triggers_since(mark, is_blinker_cancel_trigger);
         }
         // OMSI_SUSP_TRACE_WINDOW=<csv>: each wheel's travel every frame of a window run
         // (the offscreen run has OMSI_SUSP_TRACE)
@@ -1265,6 +1270,7 @@ mod kept_indicator_tests {
         assert_eq!(kept_indicator(false, Some(1.0), Some(2.0)), None);
         assert_eq!(kept_indicator(false, Some(0.0), Some(0.0)), None);
         assert_eq!(kept_indicator(false, None, Some(0.0)), None);
+        assert!(super::is_blinker_cancel_trigger("ev_lights_blinker_sw_off") && super::is_blinker_cancel_trigger("ev_blinker_aus") && !super::is_blinker_cancel_trigger("ev_lights_blinker_off") && !super::is_blinker_cancel_trigger("ev_lights_blinker_sw_on"));
     }
 }
 
