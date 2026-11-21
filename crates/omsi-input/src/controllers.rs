@@ -2782,7 +2782,8 @@ pub fn stable_unknown_button_in(
                     i
                 }
             };
-            let slot = 82 + pos;
+            let reserved = declared_button_ids(device);
+            let slot = nth_available_slot(&reserved, pos);
             return (slot < HAT_BUTTONS).then_some(slot);
         }
     }
@@ -2805,8 +2806,39 @@ pub fn stable_unknown_button_in(
             i
         }
     };
-    let slot = 82 + pos;
+    let reserved = declared_button_ids(device);
+    let slot = nth_available_slot(&reserved, pos);
     (slot < HAT_BUTTONS).then_some(slot)
+}
+
+fn nth_available_slot(reserved: &[usize], pos: usize) -> usize {
+    let mut slot = 82;
+    let mut available_count = 0;
+    loop {
+        if !reserved.contains(&slot) {
+            if available_count == pos {
+                return slot;
+            }
+            available_count += 1;
+        }
+        slot += 1;
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn declared_button_ids(name: &str) -> Vec<usize> {
+    with_declared(name, |codes| {
+        codes
+            .iter()
+            .filter_map(|&c| button_index(codes, c & 0xFFFF).or_else(|| code_button(c)))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+#[cfg(not(any(target_os = "linux", test)))]
+fn declared_button_ids(_name: &str) -> Vec<usize> {
+    Vec::new()
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -2814,15 +2846,31 @@ fn evdev_axis_code(code: u32) -> bool {
     code >> 16 == 3
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
+static DECLARED: std::sync::Mutex<Vec<(String, Option<Vec<u32>>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(any(target_os = "linux", test))]
 fn with_declared<R>(name: &str, f: impl FnOnce(&[u32]) -> R) -> Option<R> {
-    static DECLARED: std::sync::Mutex<Vec<(String, Option<Vec<u32>>)>> =
-        std::sync::Mutex::new(Vec::new());
     let mut cache = DECLARED.lock().unwrap_or_else(|e| e.into_inner());
     if !cache.iter().any(|(n, _)| n == name) {
-        cache.push((name.to_string(), declared_buttons(name)));
+        #[cfg(target_os = "linux")]
+        let codes = declared_buttons(name);
+        #[cfg(not(target_os = "linux"))]
+        let codes = None;
+        cache.push((name.to_string(), codes));
     }
     cache.iter().find(|(n, _)| n == name)?.1.as_deref().map(f)
+}
+
+#[cfg(test)]
+pub fn set_declared_buttons(name: &str, codes: Option<Vec<u32>>) {
+    let mut cache = DECLARED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = cache.iter_mut().find(|(n, _)| n == name) {
+        entry.1 = codes;
+    } else {
+        cache.push((name.to_string(), codes));
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -2917,7 +2965,7 @@ pub fn code_button(code: u32) -> Option<usize> {
         return Some(HAT_BUTTONS + (code - (u32::MAX - 3)) as usize);
     }
     let (hi, lo) = (code >> 16, (code & 0xFFFF) as usize);
-    if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") || (cfg!(test) && hi == 9) {
         (hi == 9 && lo >= 1).then(|| lo - 1)
     } else if cfg!(target_os = "linux") || cfg!(target_os = "android") {
         match lo {

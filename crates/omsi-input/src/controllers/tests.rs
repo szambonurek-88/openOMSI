@@ -716,6 +716,35 @@ mod button_tests {
 
         let _ = std::fs::remove_file(&tmp);
     }
+
+    #[test]
+    fn fallback_allocation_avoids_ids_used_by_declared_buttons() {
+        let tmp = std::env::temp_dir().join(format!(
+            "test_button_slots_mixed_{}.cfg",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+
+        let dev = "Test Pad Mixed";
+        // HID button usage 83 (0x90053) maps to ID 82 on macOS
+        let usage_83 = (9 << 16) | 83;
+        assert_eq!(super::code_button(usage_83), Some(82));
+
+        super::set_declared_buttons(dev, Some(vec![usage_83]));
+
+        // First unknown button code skips reserved ID 82 and gets 83
+        let unknown_1 = super::stable_unknown_button_in(Some(&tmp), dev, 0xabc);
+        assert_eq!(unknown_1, Some(83));
+
+        // Second unknown button code gets 84
+        let unknown_2 = super::stable_unknown_button_in(Some(&tmp), dev, 0xdef);
+        assert_eq!(unknown_2, Some(84));
+
+        // Known button usage 83 keeps its distinct ID 82 without collision
+        assert_ne!(unknown_1, super::code_button(usage_83));
+
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 #[cfg(test)]
