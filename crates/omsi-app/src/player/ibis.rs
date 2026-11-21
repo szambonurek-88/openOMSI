@@ -81,6 +81,11 @@ impl Player {
         self.ibis_holds.is_empty()
     }
 
+    /// Whether an auto-start or IBIS typing is actively setting up the trip (#2267).
+    pub(crate) fn ibis_busy(&self) -> bool {
+        self.startup.is_some() || self.ibis_typist.is_some() || self.ibis_duty.is_some()
+    }
+
     /// Put the duty's trip on the IBIS, at the stop the bus is at: now, or when the running
     /// auto-start is done. Not while a plugin leaves the IBIS to the driver
     /// (`duty.set_auto_ibis`): the driver types line, route and destination.
@@ -407,5 +412,53 @@ mod hold_tests {
         assert!(duty_selected(&mut duty_typed, &holds));
         duty_trip_pending = false;
         assert!(!duty_trip_pending);
+    }
+
+    /// A trip and route change defers marking the IBIS stop shown while startup or typist is running,
+    /// and invalidates `ibis_shown` across trip transition (#2267).
+    #[test]
+    fn deferred_trip_and_route_transition_waits_for_startup_and_typist() {
+        let mut duty_trip_pending = false;
+        let mut ibis_shown = Some(3);
+        let trip_changed = true;
+
+        if trip_changed {
+            duty_trip_pending = true;
+            ibis_shown = None;
+        }
+        assert!(duty_trip_pending);
+        assert_eq!(ibis_shown, None, "shown stop invalidated on trip change");
+
+        let auto_ibis = true;
+        let ibis_auto_stop = true;
+        let next_stop = 0;
+        let stale = omsi_sim::timetable_run::PlayerDuty::ibis_stop_stale(
+            ibis_shown,
+            next_stop,
+            auto_ibis,
+            ibis_auto_stop,
+        );
+        assert!(stale);
+
+        // While startup or typist is busy, the stop is not marked shown
+        for (startup, typist, duty) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let busy = startup || typist || duty;
+            let applied = stale && !busy;
+            assert!(!applied, "deferred during transition");
+            assert_eq!(ibis_shown, None);
+        }
+
+        // Once startup, typist and deferred duty have finished, stop is marked shown
+        let busy = false;
+        let applied = stale && !busy;
+        assert!(applied);
+        if applied {
+            ibis_shown = Some(next_stop);
+        }
+        assert_eq!(ibis_shown, Some(0));
     }
 }

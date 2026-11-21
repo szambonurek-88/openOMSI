@@ -541,6 +541,7 @@ pub(crate) fn duty_step(
     career.trip_driven(d.trip_run());
     if d.take_trip_change() {
         p.duty_trip_pending = true;
+        p.ibis_shown = None;
     }
     if p.duty_trip_pending && p.duty_typed && p.ibis_auto() {
         let (trip, stop) = d.trip_for_ibis();
@@ -555,7 +556,8 @@ pub(crate) fn duty_step(
         d.trip_for_ibis().1,
         auto_ibis,
         ibis_auto_stop,
-    ) {
+    ) && !p.ibis_busy()
+    {
         let (trip, stop) = d.trip_for_ibis();
         if p.ibis_to_stop(trip, stop) {
             p.ibis_shown = Some(stop);
