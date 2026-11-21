@@ -454,7 +454,7 @@ pub(crate) fn duty_step(
     learn_loaded: bool,
     plugin_events: Option<&mut Vec<omsi_plugin::GameEvent>>,
     announce: bool,
-) -> Option<&'static str> {
+) -> Option<String> {
     if let Some(stop) = p.html_next_stop.take() {
         if d.skip_to(stop) {
             let (trip, k) = d.trip_for_ibis();
@@ -476,7 +476,19 @@ pub(crate) fn duty_step(
         p.announce.step(d, &mut p.vehicle, run);
         // (#3281) where the game cannot announce, it says so once a trip rather than leaving the
         // player to guess
-        note = p.announce.take_note();
+        if let Some(reason) = p.announce.take_note() {
+            use omsi_sim::timetable_run::announce::QuietReason;
+            let text = match reason {
+                QuietReason::SingleRecordingHof => {
+                    "Automatic announcements: this route's HOF keeps one recording per stop, so there is nothing to press for."
+                }
+                QuietReason::NoIbisKey => {
+                    "Automatic announcements: this bus has no IBIS \"next stop\" key, so its announcements stay its own."
+                }
+                QuietReason::Off => "Automatic announcements are off.",
+            };
+            note = Some(omsi_ui::tr(text).into_owned());
+        }
     }
     // (also one ended between frames: the last stop skipped from the menu; a trip reopened
     // by a page counts from its start again, and its next end is told too)

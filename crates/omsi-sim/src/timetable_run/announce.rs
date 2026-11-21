@@ -222,16 +222,23 @@ pub fn usable(keys: Keys, pairs: usize) -> bool {
 
 /// Why the game leaves the announcements to the bus, in one line for the player (#3281) -
 /// None where it does not.
-pub fn quiet(keys: Keys, pairs: usize) -> Option<&'static str> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuietReason {
+    SingleRecordingHof,
+    NoIbisKey,
+    Off,
+}
+
+pub fn quiet(keys: Keys, pairs: usize) -> Option<QuietReason> {
     if usable(keys, pairs) {
         return None;
     }
     Some(if pairs == 0 {
-        "Automatic announcements: this route's HOF keeps one recording per stop, so there is nothing to press for."
+        QuietReason::SingleRecordingHof
     } else if keys == Keys::Neither {
-        "Automatic announcements: this bus has no IBIS \"next stop\" key, so its announcements stay its own."
+        QuietReason::NoIbisKey
     } else {
-        "Automatic announcements are off."
+        QuietReason::Off
     })
 }
 
@@ -361,11 +368,7 @@ mod tests {
             "one recording per stop: nothing to miss"
         );
         assert!(quiet(Keys::Both, 22).is_none(), "works: say nothing");
-        assert!(quiet(Keys::Neither, 22).unwrap().contains("no IBIS"));
-        assert!(
-            quiet(Keys::Both, 0)
-                .unwrap()
-                .contains("one recording per stop")
-        );
+        assert_eq!(quiet(Keys::Neither, 22), Some(QuietReason::NoIbisKey));
+        assert_eq!(quiet(Keys::Both, 0), Some(QuietReason::SingleRecordingHof));
     }
 }

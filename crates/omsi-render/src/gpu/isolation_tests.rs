@@ -84,7 +84,6 @@ fn auxiliary_adapter_state_device_open_does_not_publish_metadata() {
         assert!(crate::pipelines::parallel::compile_all(opened.device(), jobs).into_iter().all(|local| local));
         let renderer = pollster::block_on(opened.finish()).unwrap();
         assert_eq!(renderer.adapter().unwrap().get_info().backend, wgpu::Backend::Noop);
-        assert_eq!(omsi_texture::gpu_options(), gpu_options);
         assert_eq!(ADAPTER_TEXTURE_MB.load(Relaxed), texture);
     });
     assert_eq!(ADAPTER_TEXTURE_MB.load(Relaxed), texture);

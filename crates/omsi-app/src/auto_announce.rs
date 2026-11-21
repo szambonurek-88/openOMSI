@@ -93,7 +93,7 @@ pub(crate) struct AutoAnnounce {
     pairs: usize,
     /// The line the player is owed about this trip (#3281: the game stays quiet without saying
     /// why), taken by the caller once.
-    note: Option<&'static str>,
+    note: Option<announce::QuietReason>,
     /// This trip's silence was already accounted for.
     noted: bool,
     /// The vehicle has no `IBIS_vor_stumm`: the counter can only be pressed on, not stepped
@@ -393,7 +393,7 @@ impl AutoAnnounce {
     /// The one line the player is owed about this trip (#3281), once: why the game is not
     /// announcing, where it cannot (a bus with no IBIS key, a depot file of one recording per
     /// stop). None where it is announcing as asked.
-    pub(crate) fn take_note(&mut self) -> Option<&'static str> {
+    pub(crate) fn take_note(&mut self) -> Option<announce::QuietReason> {
         self.note.take()
     }
 
