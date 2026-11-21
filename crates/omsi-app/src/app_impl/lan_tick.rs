@@ -99,6 +99,15 @@ impl App {
             }
             let list = self.net.session_buses.as_deref().unwrap_or_default();
             if !list.is_empty() {
+                if let Some(host_bus) = self.args.bus.as_deref().filter(|b| !b.is_empty()) {
+                    if !omsi_lan::server_cfg::allows(list, host_bus) {
+                        log::warn!(
+                            "session: host bus {host_bus} is not in session_buses list: removed"
+                        );
+                        self.args.bus = None;
+                        self.player = None;
+                    }
+                }
                 let mut changed = false;
                 for p in lan.peers() {
                     if p.has_info
@@ -619,5 +628,34 @@ impl omsi_lan::host::LanHost for AppLanHost<'_> {
         ty: &omsi_sim::VehicleType,
     ) -> Option<std::sync::Arc<omsi_vehicle::Hof>> {
         crate::find_hof_named(cfg.hof.as_deref(), self.world?, ty)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hosted_session_enforces_session_buses_on_host_own_bus() {
+        use clap::Parser;
+        let mut app = crate::assemble_app(Args::parse_from(["openomsi"]), Default::default());
+        let host = omsi_net::LanSession::host(0, "host", Default::default(), false).unwrap();
+        app.net.lan = Some(host);
+        app.args.session_buses = Some("Vehicles/MAN_SD200/MAN_SD77.bus".into());
+
+        // Disallowed host bus is cleared
+        app.args.bus = Some("Vehicles/Forbidden/Forbidden.bus".into());
+        app.tick_lan(0.016);
+        assert_eq!(app.args.bus, None, "disallowed host bus is cleared");
+        assert!(app.player.is_none());
+
+        // Allowed host bus is kept
+        app.args.bus = Some("Vehicles/MAN_SD200/MAN_SD77.bus".into());
+        app.tick_lan(0.016);
+        assert_eq!(
+            app.args.bus.as_deref(),
+            Some("Vehicles/MAN_SD200/MAN_SD77.bus"),
+            "allowed host bus is kept"
+        );
     }
 }
