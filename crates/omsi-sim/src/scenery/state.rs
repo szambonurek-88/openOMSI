@@ -56,6 +56,8 @@ pub struct SceneryObject {
     pub needs_vars: bool,
     /// Per `[path]` its `[switchdir]` (points: the `Switch` value that sets it).
     pub switch_dirs: Vec<Option<i32>>,
+    /// Cached variable identifiers for switch variables (`SWITCH_VARS`) applicable to this object.
+    pub switch_vars: Option<Vec<omsi_script::VarId>>,
     /// The type's `.sco` (for the switches' log).
     pub sco_path: Option<Arc<Path>>,
     /// Its `[NightMapMode]` hours (the same building keeps its hours: seeded by its id).
@@ -97,6 +99,7 @@ impl SceneryObject {
             has_pages: false,
             needs_vars: false,
             switch_dirs: Vec::new(),
+            switch_vars: None,
             sco_path: None,
             use_: InUse::new(night_map_mode, map_id as u64),
             lua: None,
