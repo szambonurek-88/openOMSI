@@ -45,7 +45,7 @@ pub struct MacHid {
 // (the manager and the devices are only touched from the thread that polls the controllers)
 unsafe impl Send for MacHid {}
 
-fn string_property(device: &IOHIDDevice, key: &str) -> Option<String> {
+pub(crate) fn string_property(device: &IOHIDDevice, key: &str) -> Option<String> {
     let v = device.property(&CFString::from_str(key))?;
     v.downcast::<CFString>().ok().map(|s| s.to_string())
 }

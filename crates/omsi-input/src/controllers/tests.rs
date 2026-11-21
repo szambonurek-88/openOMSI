@@ -745,6 +745,38 @@ mod button_tests {
 
         let _ = std::fs::remove_file(&tmp);
     }
+
+    #[test]
+    fn macos_mixed_known_and_unknown_buttons_do_not_collide() {
+        let tmp = std::env::temp_dir().join(format!(
+            "test_button_slots_macos_mixed_{}.cfg",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+
+        let dev = "macOS HID Controller";
+        // HID button usage 1 -> ID 0, HID button usage 83 -> ID 82
+        let usage_1 = (9 << 16) | 1;
+        let usage_83 = (9 << 16) | 83;
+        assert_eq!(super::code_button(usage_1), Some(0));
+        assert_eq!(super::code_button(usage_83), Some(82));
+
+        super::set_declared_buttons(dev, Some(vec![usage_1, usage_83]));
+        let reserved = super::declared_button_ids(dev);
+        assert!(reserved.contains(&0));
+        assert!(reserved.contains(&82));
+
+        // The first unknown button code must avoid reserved ID 82 and receive 83:
+        let unknown_1 = super::stable_unknown_button_in(Some(&tmp), dev, 0x10001);
+        assert_eq!(unknown_1, Some(83));
+        assert_ne!(unknown_1, super::code_button(usage_83));
+
+        // The second unknown button gets 84:
+        let unknown_2 = super::stable_unknown_button_in(Some(&tmp), dev, 0x10002);
+        assert_eq!(unknown_2, Some(84));
+
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 #[cfg(test)]

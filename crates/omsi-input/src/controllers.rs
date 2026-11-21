@@ -2825,18 +2825,24 @@ fn nth_available_slot(reserved: &[usize], pos: usize) -> usize {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn declared_button_ids(name: &str) -> Vec<usize> {
     with_declared(name, |codes| {
         codes
             .iter()
-            .filter_map(|&c| button_index(codes, c & 0xFFFF).or_else(|| code_button(c)))
+            .filter_map(|&c| {
+                if cfg!(target_os = "macos") || (c >> 16 == 9) {
+                    code_button(c)
+                } else {
+                    button_index(codes, c & 0xFFFF).or_else(|| code_button(c))
+                }
+            })
             .collect()
     })
     .unwrap_or_default()
 }
 
-#[cfg(not(any(target_os = "linux", test)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", test)))]
 fn declared_button_ids(_name: &str) -> Vec<usize> {
     Vec::new()
 }
@@ -2846,17 +2852,19 @@ fn evdev_axis_code(code: u32) -> bool {
     code >> 16 == 3
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 static DECLARED: std::sync::Mutex<Vec<(String, Option<Vec<u32>>)>> =
     std::sync::Mutex::new(Vec::new());
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn with_declared<R>(name: &str, f: impl FnOnce(&[u32]) -> R) -> Option<R> {
     let mut cache = DECLARED.lock().unwrap_or_else(|e| e.into_inner());
     if !cache.iter().any(|(n, _)| n == name) {
         #[cfg(target_os = "linux")]
         let codes = declared_buttons(name);
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        let codes = declared_buttons(name);
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let codes = None;
         cache.push((name.to_string(), codes));
     }
@@ -2932,6 +2940,50 @@ fn declared_buttons(name: &str) -> Option<Vec<u32>> {
         .find(|(n, _)| n == name)
         .or(named.first())
         .map(|(_, c)| c.clone())
+}
+
+#[cfg(target_os = "macos")]
+fn declared_buttons(name: &str) -> Option<Vec<u32>> {
+    use objc2_core_foundation::{CFArray, CFRetained, CFSet};
+    use objc2_foundation::NonNull;
+    use objc2_io_kit::{IOHIDDevice, IOHIDElement, IOHIDElementType, IOHIDManager};
+
+    let manager = IOHIDManager::new(None, 0);
+    let set = manager.devices()?;
+    let set: &CFSet = &set;
+    let n = set.count();
+    let mut raw: Vec<*const std::ffi::c_void> = vec![std::ptr::null(); n.max(0) as usize];
+    unsafe { set.values(raw.as_mut_ptr()) };
+
+    for p in raw {
+        let Some(p) = NonNull::new(p as *mut IOHIDDevice) else { continue };
+        let device: CFRetained<IOHIDDevice> = unsafe { CFRetained::retain(p) };
+        let dev_name = crate::mac_hid::string_property(&device, "Product").unwrap_or_default();
+        if !names_match(&dev_name, name) {
+            continue;
+        }
+        let Some(elements) = (unsafe { device.matching_elements(None, 0) }) else { continue };
+        let elements: CFRetained<CFArray<IOHIDElement>> =
+            unsafe { CFRetained::cast_unchecked(elements) };
+        let mut codes = Vec::new();
+        let mut cookies = Vec::new();
+        for e in elements.iter() {
+            if cookies.contains(&e.cookie()) {
+                continue;
+            }
+            cookies.push(e.cookie());
+            let t = e.r#type();
+            let page = e.usage_page();
+            if t == IOHIDElementType::Input_Button || page == 9 {
+                let usage = e.usage();
+                codes.push((page << 16) | usage);
+            }
+        }
+        if !codes.is_empty() {
+            return Some(codes);
+        }
+    }
+    None
 }
 
 #[cfg(any(target_os = "linux", test))]
