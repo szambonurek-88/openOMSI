@@ -1,7 +1,6 @@
 //! Textures, object types and the ground on the GPU; the tile upload pipeline.
 use super::*;
 
-#[rustfmt::skip]
 impl World {
     /// Texture names (with their search folders) a prepared tile will ask for that are not
     /// on the GPU yet.
