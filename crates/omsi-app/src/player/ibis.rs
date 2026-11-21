@@ -39,29 +39,35 @@ impl Player {
     /// A page moved the duty to stop `stop` of `trip` (`omsi.setNextStop`): the IBIS follows,
     /// forwards or backwards, by `IBIS_busstop` / `ibox_busstop` (its keys only count up, so
     /// the typist cannot do this). Without a route in the IBIS there is nothing to move.
-    pub(crate) fn ibis_to_stop(&mut self, trip: &schedule::PlannedTrip, stop: usize) {
-        let Some(hof) = self.vehicle.host.hof.clone() else { return };
+    pub(crate) fn ibis_to_stop(&mut self, trip: &schedule::PlannedTrip, stop: usize) -> bool {
+        let Some(hof) = self.vehicle.host.hof.clone() else { return false; };
         let Some(route) = self
             .vehicle
             .var("IBIS_RouteIndex")
             .or_else(|| self.vehicle.var("ibox_routenindex"))
             .filter(|r| *r >= 0.0)
         else {
-            return;
+            return false;
         };
         if self.vehicle.var("IBIS_busstop").is_none() && self.vehicle.var("ibox_busstop").is_none() {
-            return;
+            return false;
         }
-        let Some(name) = trip.stops.get(stop).map(|s| s.name.clone()) else { return };
+        let Some(name) = trip.stops.get(stop).map(|s| s.name.clone()) else { return false; };
         if let Some(i) = schedule::ibis_stop_index(&hof, route.round() as usize, &name, stop) {
+            let mut applied = false;
             for var in ["IBIS_busstop", "ibox_busstop"] {
                 if self.vehicle.var(var).is_some() {
                     self.vehicle.set_var(var, i as f32);
+                    applied = true;
                 }
             }
             if self.vehicle.var("ibox_TTBusstopIndexLAST").is_some() {
                 self.vehicle.set_var("ibox_TTBusstopIndexLAST", stop as f32);
+                applied = true;
             }
+            applied
+        } else {
+            false
         }
     }
 
@@ -300,5 +306,23 @@ mod hold_tests {
         assert!(!(typed && duty_selected(&mut typed, &holds)), "the other plugin still holds it");
         holds.remove(&2);
         assert!(typed && duty_selected(&mut typed, &holds), "the next trip is typed again");
+    }
+
+    /// A trip change arrives while a plugin holds the IBIS: the change is not applied immediately,
+    /// but retried once the hold is released.
+    #[test]
+    fn a_trip_change_while_held_is_retried_after_hold_released() {
+        let mut holds = std::collections::BTreeSet::new();
+        holds.insert(42);
+        let mut duty_typed = true;
+        let mut duty_trip_pending = true;
+
+        assert!(!duty_selected(&mut duty_typed, &holds));
+        assert!(duty_trip_pending);
+
+        holds.remove(&42);
+        assert!(duty_selected(&mut duty_typed, &holds));
+        duty_trip_pending = false;
+        assert!(!duty_trip_pending);
     }
 }

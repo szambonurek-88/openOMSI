@@ -539,10 +539,13 @@ pub(crate) fn duty_step(
         }
     }
     career.trip_driven(d.trip_run());
-    if d.take_trip_change() && p.duty_typed {
+    if d.take_trip_change() {
+        p.duty_trip_pending = true;
+    }
+    if p.duty_trip_pending && p.duty_typed && p.ibis_auto() {
         let (trip, stop) = d.trip_for_ibis();
         p.set_duty_destination(trip, stop);
-        p.ibis_shown = Some(stop);
+        p.duty_trip_pending = false;
     }
     // (#2267) the IBIS's stop follows the duty as the bus serves them, for the players who let
     // the game type the IBIS and asked it to: the driver's "next stop" key, pressed by itself
@@ -554,8 +557,9 @@ pub(crate) fn duty_step(
         ibis_auto_stop,
     ) {
         let (trip, stop) = d.trip_for_ibis();
-        p.ibis_to_stop(trip, stop);
-        p.ibis_shown = Some(stop);
+        if p.ibis_to_stop(trip, stop) {
+            p.ibis_shown = Some(stop);
+        }
     }
     let mut fonts = world.fonts.lock();
     if let Err(e) = crate::schedule_paper::update_vehicle(&mut p.vehicle, d, &mut fonts) {

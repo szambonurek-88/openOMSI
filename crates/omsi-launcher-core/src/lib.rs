@@ -3405,6 +3405,7 @@ pub fn settings_from_text_on(text: Option<&str>, phone: bool) -> Value {
     v["ai_wait_timed_stops_only"] = json!(false);
     v["ibis_auto_stop"] = json!(false);
     v["pax_bad_driving"] = json!(true);
+    v["pax_board_when_stopped"] = json!(false);
     passenger_defaults(&mut v);
     // the arrival half of the stops of a depot file that keeps two recordings per stop
     v["auto_announce"] = json!(false);
@@ -4245,6 +4246,7 @@ pub fn settings_from_text_on(text: Option<&str>, phone: bool) -> Value {
             | "ai_wait_timed_stops_only"
             | "ibis_auto_stop"
             | "pax_bad_driving"
+            | "pax_board_when_stopped"
             | "passenger_connections"
             | "passenger_hailing"
             | "passenger_full_bus_reaction"
@@ -5007,6 +5009,10 @@ pub fn settings_to_text(v: &Value, old: Option<&str>) -> String {
     ));
     text.push_str(&format!("ibis_auto_stop={}\n", b("ibis_auto_stop", false)));
     text.push_str(&format!("pax_bad_driving={}\n", b("pax_bad_driving", true)));
+    text.push_str(&format!(
+        "pax_board_when_stopped={}\n",
+        b("pax_board_when_stopped", false)
+    ));
     text.push_str(&format!(
         "passenger_connections={}\npassenger_transfer_percent={}\n",
         b("passenger_connections", false),
