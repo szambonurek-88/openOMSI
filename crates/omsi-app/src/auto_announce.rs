@@ -128,6 +128,7 @@ impl AutoAnnounce {
             self.parked = None;
             self.want = None;
             self.watch = None;
+            self.layout = None;
         }
         let at = d.at_stop();
         let left = self.at_stop.replace(at) == Some(true) && !at;
@@ -154,16 +155,20 @@ impl AutoAnnounce {
     /// The depot file's layout of the route the IBIS shows, read once per route.
     fn layout_of(&mut self, bus: &VehicleInstance) -> Option<TwoRecordings> {
         let route = route(bus)?;
+        self.layout_lookup(route, bus.host.hof.as_deref())
+    }
+
+    fn layout_lookup(
+        &mut self,
+        route: usize,
+        hof: Option<&omsi_vehicle::Hof>,
+    ) -> Option<TwoRecordings> {
         if let Some((known, layout)) = self.layout {
             if known == route {
                 return layout;
             }
         }
-        let layout = bus
-            .host
-            .hof
-            .as_ref()
-            .and_then(|hof| announce::layout(hof, route));
+        let layout = hof.and_then(|h| announce::layout(h, route));
         self.layout = Some((route, layout));
         if let Some(l) = layout {
             log::info!(
@@ -732,5 +737,29 @@ mod tests {
             &mut |_, _| {},
         );
         assert_eq!(bus.plays, 1);
+    }
+
+    #[test]
+    fn a_previously_unavailable_hof_is_retried_on_a_new_trip() {
+        let mut a = AutoAnnounce::new();
+        let mut hof = omsi_vehicle::Hof::default();
+        hof.info_busstop_lists = vec![vec![
+            "Start".to_string(),
+            "welcome19".to_string(),
+            "FRoad".to_string(),
+            "FRoad1".to_string(),
+        ]];
+        assert_eq!(a.layout_lookup(0, None), None);
+        assert_eq!(a.layout, Some((0, None)));
+        assert_eq!(a.layout_lookup(0, Some(&hof)), None);
+
+        // A new trip clears the cached route layout
+        a.trip = Some(1);
+        a.layout = None;
+
+        assert_eq!(
+            a.layout_lookup(0, Some(&hof)),
+            Some(TwoRecordings { first: 2, pairs: 1 })
+        );
     }
 }
