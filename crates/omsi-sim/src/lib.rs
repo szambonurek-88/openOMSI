@@ -12,6 +12,7 @@ pub mod handover;
 pub mod host;
 pub mod htmltex;
 pub mod ibis;
+pub mod incidents;
 pub mod image_decode;
 pub mod human;
 pub mod human_omsi;
