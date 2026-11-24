@@ -3599,6 +3599,11 @@ pub fn settings_from_text_on(text: Option<&str>, phone: bool) -> Value {
     passenger_defaults(&mut v);
     // the arrival half of the stops of a depot file that keeps two recordings per stop
     v["auto_announce"] = json!(false);
+    // which of the three a city announces, and how near a stop the approach one plays (#4033)
+    v["announce_arrival"] = json!(true);
+    v["announce_departure"] = json!(true);
+    v["announce_approach"] = json!(false);
+    v["announce_approach_m"] = json!(120);
     // OMSI's own options
     for (k, d) in [
         ("maintenance", json!(0)),
@@ -4464,6 +4469,9 @@ pub fn settings_from_text_on(text: Option<&str>, phone: bool) -> Value {
             | "passenger_full_bus_reaction"
             | "pax_short_rides_stand"
             | "auto_announce"
+            | "announce_arrival"
+            | "announce_departure"
+            | "announce_approach"
             | "rear_door_boarding"
             | "ambient" => v[&k] = json!(b(val)),
             "pax_late_tolerance_min" => {
@@ -4473,6 +4481,14 @@ pub fn settings_from_text_on(text: Option<&str>, phone: bool) -> Value {
                         .filter(|x| x.is_finite())
                         .unwrap_or(5.0)
                         .clamp(0.0, 120.0)
+                )
+            }
+            "announce_approach_m" => {
+                v[&k] = json!(
+                    val.trim()
+                        .parse::<f64>()
+                        .map(|x| x.clamp(0.0, 1000.0))
+                        .unwrap_or(120.0)
                 )
             }
             "head_tracking_source" => v[&k] = json!(head_tracking_source(val)),
@@ -5288,6 +5304,13 @@ pub fn settings_to_text(v: &Value, old: Option<&str>) -> String {
         "auto_announce={}\npax_no_ticket={}\npax_entry_doors={ed}\n",
         b("auto_announce", false),
         b("pax_no_ticket", false)
+    ));
+    text.push_str(&format!(
+        "announce_arrival={}\nannounce_departure={}\nannounce_approach={}\nannounce_approach_m={}\n",
+        b("announce_arrival", true),
+        b("announce_departure", true),
+        b("announce_approach", false),
+        f("announce_approach_m", 120.0).clamp(0.0, 1000.0)
     ));
     text.push_str(&format!(
         "triple_left_angle_deg={}\ntriple_right_angle_deg={}\ntriple_eye_height_mm={}\n",

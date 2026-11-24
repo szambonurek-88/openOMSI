@@ -17,6 +17,7 @@ pub(super) fn option_now(app: &App, verb: &str, arg: &str) -> Option<f32> {
         "traffic" => app.session.traffic.as_ref()?.target as f32,
         "pax" => s.pax_density,
         "passenger_transfer_percent" => s.passenger_transfer_percent,
+        "announce_approach_m" => s.announce_approach_m,
         "volume" => s.volume,
         "led_glow" => s.led_glow as f32,
         "night_brightness" => s.night_brightness,
@@ -128,6 +129,11 @@ pub(super) fn option_set(
             Some(("pax_density", v.to_string()))
         }
         "passenger_transfer_percent" => set_connection_percent(app, v),
+        "announce_approach_m" => {
+            // (#4033: how far before the stop the approach announcement plays)
+            app.settings.announce_approach_m = v.clamp(0.0, 1000.0);
+            Some(("announce_approach_m", app.settings.announce_approach_m.to_string()))
+        }
         "volume" => {
             app.settings.volume = v;
             Some(("volume", v.to_string()))
@@ -599,6 +605,9 @@ pub(super) fn toggle_now(app: &App, id: &str) -> Option<bool> {
         "pax_bad_driving" => s.pax_bad_driving,
         "pax_stop_numbers_exact" => s.pax_stop_numbers_exact,
         "auto_announce" => s.auto_announce,
+        "announce_arrival" => s.announce_arrival,
+        "announce_departure" => s.announce_departure,
+        "announce_approach" => s.announce_approach,
         "collision_pedestrians" => s.collision_pedestrians,
         "ssao" => s.ssao,
         "detail_textures" => s.detail_textures,
@@ -999,6 +1008,18 @@ fn toggle_set_environment_and_graphics(
         "auto_announce" => {
             app.settings.auto_announce = on;
             Some(("auto_announce", bit))
+        }
+        "announce_arrival" => {
+            app.settings.announce_arrival = on;
+            Some(("announce_arrival", bit))
+        }
+        "announce_departure" => {
+            app.settings.announce_departure = on;
+            Some(("announce_departure", bit))
+        }
+        "announce_approach" => {
+            app.settings.announce_approach = on;
+            Some(("announce_approach", bit))
         }
         "collision_pedestrians" => {
             app.settings.collision_pedestrians = on;
