@@ -61,6 +61,15 @@ impl App {
             self.perf.generation_since = if making { self.perf.generation_since.or_else(|| Some(Instant::now())) } else { None };
         }
         let shot = self.perf.shot.take();
+        // (#1247: with the software cursor the game draws the arrow itself and the system's
+        // cursor is never moved, which is what keeps G-SYNC running under WGC)
+        let soft = if self.settings.software_cursor && !self.vr_active() && self.input.window_focused {
+            let (x, y) = self.input.cursor;
+            Some((self.input.cursor_kind, glam::Vec2::new(x, y), self.settings.ui_scale))
+        } else {
+            None
+        };
+        self.software_cursor(soft);
         if let Some(s) = self.gfx.surface.as_ref() {
             let (w, h) = (s.config.width, s.config.height);
             self.touch_prepare(w, h);
