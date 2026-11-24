@@ -276,6 +276,7 @@ pub(super) fn audio(cx: AudioCx, dt: f32) {
             master: if *cx.clock.paused { 0.0 } else { cx.common.settings.volume.clamp(0.0, 1.0) },
             reverb_time,
             reverb_mix,
+            surround: cx.common.settings.audio_surround,
         });
     }
     // on foot without a bus of one's own: the vehicles one placed still stand, run
