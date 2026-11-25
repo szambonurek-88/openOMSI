@@ -94,6 +94,8 @@ pub(super) fn steps_of(verb: &str) -> Option<Vec<f32>> {
         "traffic" => TRAFFIC.iter().filter(|&&v| !cfg!(any(target_os = "android", target_os = "ios")) || v <= super::TRAFFIC_MAX).map(|&v| v as f32).collect(),
         "pax" => PAX.to_vec(),
         "passenger_transfer_percent" => (0..=100).map(|n|n as f32).collect(),
+        // (#4033: how far before the stop the approach announcement plays: 20 m .. 500 m)
+        "announce_approach_m" => (2..=50).map(|n| n as f32 * 10.0).collect(),
         "volume" => VOLUME.to_vec(),
         "led_glow" => (0..16).map(|v| v as f32).collect(),
         "night_brightness" => (0..=12).map(|v| v as f32 * 0.25).collect(),
@@ -132,11 +134,12 @@ pub(super) fn steps_of(verb: &str) -> Option<Vec<f32>> {
         "hour" => (0..24).map(|v| v as f32).collect(),
         "minute" => (0..60).map(|v| v as f32).collect(),
         // the weather, made by hand
-        // (visibility goes by a few percent at a time from 100 m to 50 km, on whole tens of metres)
+        // (visibility goes by a few percent at a time from 50 m, as low as Omsi.exe's weather
+        // dialog goes, to 50 km, on whole tens of metres)
         "visibility" => {
-            let mut v: Vec<f32> = (0..=120)
+            let mut v: Vec<f32> = (0..=133)
                 .map(|i| {
-                    let x = 100.0 * 500f32.powf(i as f32 / 120.0);
+                    let x = 50.0 * 1000f32.powf(i as f32 / 133.0);
                     let step = if x < 1000.0 { 10.0 } else if x < 10000.0 { 100.0 } else { 500.0 };
                     (x / step).round() * step
                 })
@@ -195,7 +198,7 @@ pub(crate) fn set_precip(app: &mut App, to: usize) {
 
 /// Whether `verb` is a slider (a click on its track sets the value there).
 pub(crate) fn is_slider(verb: &str) -> bool {
-    steps_of(verb).is_some()
+    steps_of(verb).is_some() || crate::game_controller_menu::slider_verb(verb)
 }
 
 /// The index of the value in `steps` nearest to `now`.
