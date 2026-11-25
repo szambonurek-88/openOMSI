@@ -83,6 +83,9 @@ pub struct Listener {
     /// its reverberation time in seconds, and how much of it is heard (0..1).
     pub reverb_time: f32,
     pub reverb_mix: f32,
+    /// The output is a 5.1 system and `[3d]` sounds are to be placed on its five speakers
+    /// (#2037, the options' switch): off, everything is panned across two channels as before.
+    pub surround: bool,
 }
 
 impl Default for Listener {
@@ -94,6 +97,7 @@ impl Default for Listener {
             master: 1.0,
             reverb_time: 0.0,
             reverb_mix: 0.0,
+            surround: false,
         }
     }
 }
@@ -689,6 +693,76 @@ mod tests {
         (Mixer::new(s, cmd_rx, back_tx, FIRST_ROOM), cmd_tx, back_rx)
     }
 
+    fn shared_with(ch: usize) -> (Mixer, crate::spsc::Producer<Cmd>, crate::spsc::Consumer<Back>) {
+        let s = Arc::new(Shared::new(48_000, ch, false, false));
+        let (cmd_tx, cmd_rx) = crate::spsc::channel(64);
+        let (back_tx, back_rx) = crate::spsc::channel(64);
+        (Mixer::new(s, cmd_rx, back_tx, FIRST_ROOM), cmd_tx, back_rx)
+    }
+
+    /// A steady sound `deg` to the right of the view, 5 m away, mixed on `ch` channels with the
+    /// surround option on or off: how much of the sound each of the six speakers of a 5.1
+    /// system gets (the share of the whole energy, 0..1).
+    fn surround_energy(deg: f32, ch: usize, surround: bool) -> [f32; 6] {
+        let (mut s, _cmd, _back) = shared_with(ch);
+        s.shared.listener.store(&Listener {
+            position: Vec3::ZERO,
+            forward: Vec3::Y,
+            right: Vec3::X,
+            surround,
+            ..Default::default()
+        });
+        let r = deg.to_radians();
+        let clip = Arc::new(Clip { sample_rate: 48_000, channels: 1, samples: vec![16_384; 4_800] });
+        let mut v = voice(clip, 1.0);
+        v.params.position = Some(Vec3::new(r.sin() * 5.0, r.cos() * 5.0, 0.0));
+        s.voices.push(v);
+        let frames = 4_000;
+        let mut out = vec![0.0f32; frames * ch];
+        s.render(&mut out);
+        let mut e = [0.0f32; 6];
+        for i in 0..frames {
+            for (c, x) in e.iter_mut().enumerate().take(ch.min(6)) {
+                let y = out[i * ch + c];
+                *x += y * y;
+            }
+        }
+        let total: f32 = e.iter().sum::<f32>().max(1e-9);
+        e.map(|x| x / total)
+    }
+
+    /// #2037: on a 5.1 device a sound is heard from the speakers it faces - the front right
+    /// door from the front right speaker, the rear one from the back right - and on two
+    /// channels, or with the option off, exactly as before.
+    #[test]
+    fn a_51_device_places_a_sound_where_it_is() {
+        // (a source to the right on two speakers: mostly on the right one - `[sound_stereo]`
+        // narrows the picture, as in OMSI 2, so the left is not quite silent)
+        let two = surround_energy(30.0, 2, false);
+        assert!(two[1] > two[0] && two[1] > 0.5 && two[0] > 0.0, "{two:?}");
+        assert!(two[2..].iter().all(|x| *x == 0.0));
+        // (the option off on a six-channel device: the same two)
+        let off = surround_energy(30.0, 6, false);
+        assert_eq!(off[0], two[0], "{off:?}");
+        assert!(off[2..].iter().all(|x| *x == 0.0));
+        // (on: the front right speaker takes it, the centre goes along a little)
+        let front_right = surround_energy(30.0, 6, true);
+        assert!(front_right[1] > 0.7 && front_right[2] > 0.05 && front_right[2] < front_right[1], "{front_right:?}");
+        assert!(front_right[0] < 0.01 && front_right[4] < 0.01 && front_right[5] < 0.01, "{front_right:?}");
+        assert_eq!(front_right[3], 0.0, "the sub-woofer gets nothing");
+        // (a rear door behind on the right: the back right speaker)
+        let back_right = surround_energy(110.0, 6, true);
+        assert!(back_right[5] > 0.99, "{back_right:?}");
+        assert!(back_right[1] < 0.01 && back_right[2] < 0.01, "{back_right:?}");
+        // (the engine ahead: the centre, the fronts along with it)
+        let ahead = surround_energy(0.0, 6, true);
+        assert!(ahead[2] > 0.5 && ahead[2] > ahead[0] && ahead[2] > ahead[1], "{ahead:?}");
+        assert!(ahead[4] < 0.01 && ahead[5] < 0.01, "{ahead:?}");
+        // (the option on but a two-channel device: still two, as before)
+        let two_on = surround_energy(30.0, 2, true);
+        assert_eq!(two_on[0], two[0], "{two_on:?}");
+    }
+
     fn voice(clip: Arc<Clip>, gain: f32) -> Voice {
         let mut v = Voice::new(
             1,
@@ -1002,6 +1076,55 @@ pub fn pan_gains(listener: &Listener, d: Vec3, stereo: f32) -> (f32, f32) {
     }
 }
 
+/// Where a 5.1 layout's speakers stand, in degrees from straight ahead, clockwise (the angle
+/// [`surround_gains`] measures a source at): centre, front left, front right, back left,
+/// back right. The sub-woofer is not here: it takes the bass of the whole mix, not a source.
+const SURROUND_SPEAKERS: [(usize, f32); 5] = [(2, 0.0), (0, -30.0), (1, 30.0), (4, -110.0), (5, 110.0)];
+
+/// The gains of a `[3d]` sound `d` away from the listener on a 5.1 system, in the order front
+/// left, front right, centre, low frequency, back left, back right (#2037).
+///
+/// The sound goes to the speakers its direction points at, and only those: a door opening at
+/// the front right of the bus is heard on the front right speaker, a rear door on the back
+/// right one, the engine behind the cab on the back pair. A speaker 60° or more away from the
+/// source is silent, the ones nearer share the sound with equal power (so a source exactly
+/// towards one speaker has the whole of it there), and the sub-woofer never gets any of it -
+/// bass management is the receiver's business, and a source placed in the sub is heard under
+/// the seats.
+///
+/// `stereo` is not used: OMSI's `[sound_stereo]` narrows the stereo picture, which a surround
+/// system does not need (it has a speaker where the sound is).
+pub fn surround_gains(listener: &Listener, d: Vec3) -> [f32; 6] {
+    let right = listener.right.normalize_or_zero();
+    let forward = listener.forward.normalize_or_zero();
+    let up = right.cross(forward).normalize_or_zero();
+    // (the direction in the listener's horizontal plane: height picks no speaker)
+    let flat = (d - up * d.dot(up)).normalize_or_zero();
+    let angle = flat.dot(right).atan2(flat.dot(forward)).to_degrees();
+    let mut gains = [0.0f32; 6];
+    for (speaker, at) in SURROUND_SPEAKERS {
+        // (the angle between the two, the short way round: -180..180)
+        let mut off = (angle - at).abs() % 360.0;
+        if off > 180.0 {
+            off = 360.0 - off;
+        }
+        gains[speaker] = (1.0 - off / 60.0).clamp(0.0, 1.0);
+    }
+    // equal power: the squares add up to one, so a sound between two speakers is as loud as
+    // it is on one of them
+    let power: f32 = gains.iter().map(|g| g * g).sum();
+    if power > 0.0 {
+        let norm = power.sqrt();
+        for g in gains.iter_mut() {
+            *g /= norm;
+        }
+    } else {
+        // (nowhere on the ring - straight above, say: the centre it is)
+        gains[2] = 1.0;
+    }
+    gains
+}
+
 #[cfg(test)]
 mod distance_tests {
     #[test]
@@ -1012,6 +1135,45 @@ mod distance_tests {
         assert_eq!(super::distance_gain(0.0, 3.0), 0.0, "a range of 0");
         assert_eq!(super::distance_gain(5.0, f32::NAN), 0.0, "nowhere: not heard");
         assert_eq!(super::distance_gain(5.0, f32::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn a_surround_source_is_heard_from_the_speakers_it_faces() {
+        use glam::Vec3;
+        let l = super::Listener { forward: Vec3::Y, right: Vec3::X, ..Default::default() };
+        let at = |deg: f32| {
+            let r = deg.to_radians();
+            super::surround_gains(&l, Vec3::new(r.sin() * 5.0, r.cos() * 5.0, 0.0))
+        };
+        // (the front right door, 30° to the driver's right: the front right speaker, the
+        // middle of the front taken along by the centre - and nothing on the left or behind)
+        let g = at(30.0);
+        assert!(g[1] > 0.8 && g[2] > 0.0 && g[2] < g[1], "{g:?}");
+        assert!(g[0] < 1e-4 && g[4] < 1e-4 && g[5] < 1e-4);
+        // (a rear door 110° behind on the right: the back right one, alone)
+        let g = at(110.0);
+        assert!((g[5] - 1.0).abs() < 1e-4, "{g:?}");
+        assert!(g[0] < 1e-4 && g[1] < 1e-4 && g[2] < 1e-4 && g[4] < 1e-4);
+        // (the engine straight ahead: the centre speaker, and never the sub-woofer)
+        let g = at(0.0);
+        assert!((g[2] - 0.8).abs() < 0.1 && g[2] > g[0] && g[2] > g[1], "{g:?}");
+        assert_eq!(g[3], 0.0, "the sub gets nothing");
+        // (between two speakers the sound is shared, at the same power as on one of them)
+        let g = at(20.0);
+        assert!(g[1] > 0.5 && g[2] > 0.5, "{g:?}");
+        assert!((g[0] * g[0] + g[1] * g[1] + g[2] * g[2] - 1.0).abs() < 1e-4);
+        // (behind on the left: the back pair, that side first)
+        let g = at(-140.0);
+        assert!(g[4] > g[5] && g[4] > 0.5 && g[0] < 1e-4 && g[1] < 1e-4, "{g:?}");
+        // (right above the listener there is no side to go to: the front, centre and all)
+        let g = super::surround_gains(&l, Vec3::new(0.0, 0.0, 2.0));
+        assert!(g[2] > 0.8 && g[2] > g[0] && g[0] == g[1] && g[4] < 1e-4 && g[5] < 1e-4, "{g:?}");
+        // (the same direction 20 m away and higher: the same speakers - the distance and the
+        // height are the mixer's business)
+        assert_eq!(at(-90.0), {
+            let r = (-90.0f32).to_radians();
+            super::surround_gains(&l, Vec3::new(r.sin() * 20.0, r.cos() * 20.0, 3.0))
+        });
     }
 
     #[test]
