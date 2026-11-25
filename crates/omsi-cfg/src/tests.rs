@@ -346,17 +346,45 @@ fn a_mod_folder_in_mods_is_a_content_root_of_its_own() {
     w("Mods/README.txt", b"readme");
 
     let roots = mod_dirs(&content);
-    assert_eq!(roots, vec![content.join("Mods/MyBus"), content.join("Mods/SomeMap/SomeMap")]);
+    assert_eq!(
+        roots,
+        vec![
+            content.join("Mods/MyBus"),
+            content.join("Mods/SomeMap/SomeMap")
+        ]
+    );
 
     let added = mount_mod_dirs(&content);
     assert_eq!(added, roots);
     add_content_root(content.clone());
     // the mod's bus is found, the stock one as well, and the mod is searched first
-    assert_eq!(find_in_roots("Vehicles/ModBus/bus.bus").unwrap().1.file_name().unwrap(), "bus.bus");
-    assert!(find_in_roots("Vehicles/ModBus/bus.bus").unwrap().0.starts_with(content.join("Mods/MyBus")));
-    assert!(find_in_roots("Vehicles/Stock/stock.bus").unwrap().0.starts_with(&content));
+    assert_eq!(
+        find_in_roots("Vehicles/ModBus/bus.bus")
+            .unwrap()
+            .1
+            .file_name()
+            .unwrap(),
+        "bus.bus"
+    );
+    assert!(
+        find_in_roots("Vehicles/ModBus/bus.bus")
+            .unwrap()
+            .0
+            .starts_with(content.join("Mods/MyBus"))
+    );
+    assert!(
+        find_in_roots("Vehicles/Stock/stock.bus")
+            .unwrap()
+            .0
+            .starts_with(&content)
+    );
     // the map inside the pack's own folder
-    assert!(find_in_roots("maps/M/global.cfg").unwrap().1.starts_with(content.join("Mods/SomeMap/SomeMap")));
+    assert!(
+        find_in_roots("maps/M/global.cfg")
+            .unwrap()
+            .1
+            .starts_with(content.join("Mods/SomeMap/SomeMap"))
+    );
     // nothing of the launcher's own folders
     assert!(find_in_roots("Vehicles/Old/old.bus").is_none());
     assert!(find_in_roots("Vehicles/Waiting/w.bus").is_none());
@@ -377,7 +405,11 @@ fn a_mod_folder_with_one_top_level_name_is_its_own_root() {
     let dir = std::env::temp_dir().join(format!("omsi-mod-top-{}", std::process::id()));
     let content = dir.join("content");
     std::fs::create_dir_all(content.join("Mods/Winter").join("Texture")).unwrap();
-    std::fs::write(content.join("Mods/Winter").join("Texture").join("snow.dds"), b"dds").unwrap();
+    std::fs::write(
+        content.join("Mods/Winter").join("Texture").join("snow.dds"),
+        b"dds",
+    )
+    .unwrap();
     assert_eq!(mod_dirs(&content), vec![content.join("Mods/Winter")]);
     std::fs::remove_dir_all(&dir).ok();
 }
