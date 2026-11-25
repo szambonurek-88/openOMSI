@@ -163,6 +163,9 @@ use glam::Vec2;
 /// The touch controls' state (a field of `App`).
 pub struct Touch {
     pub enabled: bool,
+    /// The cursor the game draws itself (#1247): its kind, its place in physical pixels and
+    /// the interface's scale; `None` when the player uses the system's cursor.
+    pub(crate) cursor: Option<(u8, Vec2, f32)>,
     fingers: Vec<Touched>,
     /// The wheel's turn (-1 .. 1), the pedals (0 .. 1).
     steer: f32,
@@ -218,6 +221,7 @@ impl Touch {
     pub fn new() -> Touch {
         Touch {
             enabled: crate::platform::touch_controls(),
+            cursor: None,
             fingers: Vec::new(),
             steer: 0.0,
             throttle: 0.0,
@@ -1229,11 +1233,23 @@ impl App {
     /// Lay the controls out for a frame of `w` x `h` and paint them (drawn by
     /// `Touch::render` once the game's picture is in the frame).
     pub(crate) fn touch_prepare(&mut self, w: u32, h: u32) {
-        if !self.input.touch.enabled {
-            return;
+        if self.input.touch.enabled {
+            self.touch_layout(w as f32, h as f32);
+            self.touch_paint();
+        } else if self.input.touch.cursor.is_some() {
+            // (no controls to paint, but the cursor of this frame still goes into the painter,
+            // which is cleared once a frame either way)
+            self.input.touch.painter.clear();
         }
-        self.touch_layout(w as f32, h as f32);
-        self.touch_paint();
+        if let Some((kind, at, scale)) = self.input.touch.cursor {
+            omsi_ui::cursor::paint(&mut self.input.touch.painter, kind, at, scale);
+        }
+    }
+
+    /// Put the software cursor `kind` at `at` (physical pixels) at the interface's `scale`, or
+    /// take it away (`None`). Nothing is drawn while the system's own cursor is used.
+    pub(crate) fn software_cursor(&mut self, cursor: Option<(u8, Vec2, f32)>) {
+        self.input.touch.cursor = cursor;
     }
 
     /// `touch down|move|up x,y [id]` of an input script: a finger, through the same path.
@@ -1250,7 +1266,7 @@ impl App {
 impl Touch {
     /// Draw the controls painted last over the frame (`view`, `w` x `h`).
     pub(crate) fn render(&mut self, r: &Renderer, view: &wgpu::TextureView, w: u32, h: u32) {
-        if !self.enabled || self.painter.is_empty() {
+        if (!self.enabled && self.cursor.is_none()) || self.painter.is_empty() {
             return;
         }
         let format = r.format();
