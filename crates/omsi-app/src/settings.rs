@@ -845,20 +845,6 @@ impl Settings {
                 "triple_screen" => s.triple.enabled = b(v),
                 "triple_span" => s.triple_span = b(v),
                 "triple_hud_center" => s.triple_hud_center = b(v),
-                "triple_fov_deg" => {
-                    s.triple.fov_deg = v
-                        .parse::<f32>()
-                        .ok()
-                        .filter(|x| x.is_finite())
-                        .map(|x| if x < 20.0 { 0.0 } else { x.min(120.0) })
-                        .unwrap_or(s.triple.fov_deg)
-                }
-                "triple_width_mm" => s.triple.width_mm = bounded_float(v, 200.0, 2000.0, s.triple.width_mm),
-                "triple_distance_mm" => s.triple.distance_mm = bounded_float(v, 200.0, 3000.0, s.triple.distance_mm),
-                "triple_bezel_mm" => s.triple.bezel_mm = bounded_float(v, 0.0, 100.0, s.triple.bezel_mm),
-                "triple_left_angle_deg" => s.triple.left_angle_deg = bounded_float(v, 0.0, 90.0, s.triple.left_angle_deg),
-                "triple_right_angle_deg" => s.triple.right_angle_deg = bounded_float(v, 0.0, 90.0, s.triple.right_angle_deg),
-                "triple_eye_height_mm" => s.triple.eye_height_mm = bounded_float(v, -500.0, 500.0, s.triple.eye_height_mm),
                 "fullscreen" => s.fullscreen = b(v),
                 "vsync" => s.vsync = b(v),
                 "volume" => s.volume = v.parse().unwrap_or(s.volume),
@@ -1048,6 +1034,7 @@ impl Settings {
                 "notes_trip" => s.notes_trip = b(v),
                 "notes_tickets" => s.notes_tickets = b(v),
                 "info_bar" => s.info_bar = b(v),
+                k if k.starts_with("triple_") => s.read_triple_setting(&k, v),
                 k if let Some(at) = crate::ui::SIZE_KEYS.iter().position(|key| *key == k) => s.hud_sizes[at] = v.parse::<f32>().ok().filter(|x| x.is_finite()).map(crate::ui::window_size).unwrap_or(s.hud_sizes[at]),
                 "chat_size" => s.chat_size = v.parse::<f32>().ok().filter(|x| x.is_finite()).map(|x| x.clamp(0.5, 3.0)).unwrap_or(s.chat_size),
                 "ui_scale" => s.ui_scale = v.parse::<f32>().ok().filter(|x| x.is_finite()).map(|x| x.clamp(0.5, 2.0)).unwrap_or(s.ui_scale),
@@ -1064,6 +1051,41 @@ impl Settings {
         (s.nav_dynamic_arrows, s.nav_map_arrows) = omsi_launcher_lib::route_arrows_from_text(text);
         s.settle_after_reading(graphics, version);
         s
+    }
+
+    fn read_triple_setting(&mut self, key: &str, v: &str) {
+        match key {
+            "triple_fov_deg" => {
+                self.triple.fov_deg = v
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|x| x.is_finite())
+                    .map(|x| if x < 20.0 { 0.0 } else { x.min(120.0) })
+                    .unwrap_or(self.triple.fov_deg)
+            }
+            "triple_width_mm" => {
+                self.triple.width_mm = bounded_float(v, 200.0, 2000.0, self.triple.width_mm)
+            }
+            "triple_distance_mm" => {
+                self.triple.distance_mm = bounded_float(v, 200.0, 3000.0, self.triple.distance_mm)
+            }
+            "triple_bezel_mm" => {
+                self.triple.bezel_mm = bounded_float(v, 0.0, 100.0, self.triple.bezel_mm)
+            }
+            "triple_left_angle_deg" => {
+                self.triple.left_angle_deg =
+                    bounded_float(v, 0.0, 90.0, self.triple.left_angle_deg)
+            }
+            "triple_right_angle_deg" => {
+                self.triple.right_angle_deg =
+                    bounded_float(v, 0.0, 90.0, self.triple.right_angle_deg)
+            }
+            "triple_eye_height_mm" => {
+                self.triple.eye_height_mm =
+                    bounded_float(v, -500.0, 500.0, self.triple.eye_height_mm)
+            }
+            _ => {}
+        }
     }
 
     /// One of Enhanced's light options as a settings file says it (`ray_tracing`, `light_shadows`,

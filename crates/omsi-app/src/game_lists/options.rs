@@ -178,14 +178,7 @@ pub(super) fn option_set(
             Some(("look_sens", app.settings.look_sens.to_string()))
         }
         "head_tracking_smoothing" | "head_tracking_dead_zone" => {
-            let s = &mut app.settings;
-            let (key, to) = if verb == "head_tracking_smoothing" {
-                ("head_tracking_smoothing", &mut s.head_tracking_smoothing)
-            } else {
-                ("head_tracking_dead_zone", &mut s.head_tracking_dead_zone)
-            };
-            *to = omsi_launcher_lib::head_tracking_value(key, Some(v as f64)) as f32;
-            Some((key, to.to_string()))
+            set_head_tracking_option(app, verb, v)
         }
         "pad_steer_smooth" => {
             app.settings.pad_steer_smooth = v.clamp(0.0, 300.0).round();
@@ -488,6 +481,48 @@ fn option_set_environment(
         }
         _ => set_graphics_brightness(app, verb, v),
     }
+}
+
+fn set_head_tracking_option(app: &mut App, verb: &str, v: f32) -> Option<(&'static str, String)> {
+    let s = &mut app.settings;
+    let (key, to) = if verb == "head_tracking_smoothing" {
+        ("head_tracking_smoothing", &mut s.head_tracking_smoothing)
+    } else {
+        ("head_tracking_dead_zone", &mut s.head_tracking_dead_zone)
+    };
+    *to = omsi_launcher_lib::head_tracking_value(key, Some(v as f64)) as f32;
+    Some((key, to.to_string()))
+}
+
+fn toggle_head_tracking_invert(
+    app: &mut App,
+    id: &str,
+    on: bool,
+    bit: String,
+) -> Option<(&'static str, String)> {
+    let (key, field) = match id {
+        "head_tracking_invert_yaw" => {
+            ("head_tracking_invert_yaw", &mut app.settings.head_tracking_invert_yaw)
+        }
+        "head_tracking_invert_pitch" => {
+            ("head_tracking_invert_pitch", &mut app.settings.head_tracking_invert_pitch)
+        }
+        "head_tracking_invert_roll" => {
+            ("head_tracking_invert_roll", &mut app.settings.head_tracking_invert_roll)
+        }
+        "head_tracking_invert_x" => {
+            ("head_tracking_invert_x", &mut app.settings.head_tracking_invert_x)
+        }
+        "head_tracking_invert_y" => {
+            ("head_tracking_invert_y", &mut app.settings.head_tracking_invert_y)
+        }
+        "head_tracking_invert_z" => {
+            ("head_tracking_invert_z", &mut app.settings.head_tracking_invert_z)
+        }
+        _ => return None,
+    };
+    *field = on;
+    Some((key, bit))
 }
 
 /// The two new graphics sliders, kept separate to avoid growing the already-long
@@ -920,30 +955,7 @@ fn toggle_set_environment_and_graphics(
             app.settings.tobii_edges = on;
             Some(("tobii_edges", bit))
         }
-        "head_tracking_invert_yaw" => {
-            app.settings.head_tracking_invert_yaw = on;
-            Some(("head_tracking_invert_yaw", bit))
-        }
-        "head_tracking_invert_pitch" => {
-            app.settings.head_tracking_invert_pitch = on;
-            Some(("head_tracking_invert_pitch", bit))
-        }
-        "head_tracking_invert_roll" => {
-            app.settings.head_tracking_invert_roll = on;
-            Some(("head_tracking_invert_roll", bit))
-        }
-        "head_tracking_invert_x" => {
-            app.settings.head_tracking_invert_x = on;
-            Some(("head_tracking_invert_x", bit))
-        }
-        "head_tracking_invert_y" => {
-            app.settings.head_tracking_invert_y = on;
-            Some(("head_tracking_invert_y", bit))
-        }
-        "head_tracking_invert_z" => {
-            app.settings.head_tracking_invert_z = on;
-            Some(("head_tracking_invert_z", bit))
-        }
+        k if k.starts_with("head_tracking_invert_") => toggle_head_tracking_invert(app, id, on, bit),
         "camcoll" => {
             app.settings.camera_collision = on;
             Some(("camera_collision", bit))

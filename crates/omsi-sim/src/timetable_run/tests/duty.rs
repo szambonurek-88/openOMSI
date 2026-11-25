@@ -1380,7 +1380,9 @@ fn straight_duty(bus_x: f64) -> PlayerDuty {
 fn the_distances_an_approach_announcement_is_measured_by() {
     // (300 m from the stop before, 100 m still to go)
     let duty = straight_duty(200.0);
-    let (left, gap) = duty.leg_distances().expect("a place for the bus and the stop");
+    let (left, gap) = duty
+        .leg_distances()
+        .expect("a place for the bus and the stop");
     assert!((left - 100.0).abs() < 0.01, "{left}");
     assert!((gap.expect("a stop before this one") - 300.0).abs() < 0.01);
     // (a stop 60 m from the last one: the gap the halfway rule clamps the approach to)

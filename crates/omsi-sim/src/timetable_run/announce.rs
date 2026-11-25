@@ -292,7 +292,12 @@ pub struct Policy {
 impl Policy {
     /// What OMSI 2 does, and what the game did before the options existed: the arrival
     /// recording at the stop, the departure one as the scripts play it.
-    pub const DEFAULT: Policy = Policy { departure: true, arrival: true, approach: false, approach_m: 120.0 };
+    pub const DEFAULT: Policy = Policy {
+        departure: true,
+        arrival: true,
+        approach: false,
+        approach_m: 120.0,
+    };
 
     /// Whether the game is to press anything at all (all three boxes off: it leaves the bus's
     /// announcements to its scripts, as with the switch off).
@@ -328,7 +333,11 @@ pub fn preview_entry(hof: &Hof, route: usize, name: &str, k: usize) -> Option<us
 /// Two stops 60 m apart with a 120 m approach would otherwise announce the second one as the
 /// bus pulls out of the first (#4033: "default distance can be halfway between the stops").
 pub fn approach_metres(asked: f32, previous_gap: Option<f32>) -> f32 {
-    let asked = if asked.is_finite() { asked.max(0.0) } else { Policy::DEFAULT.approach_m };
+    let asked = if asked.is_finite() {
+        asked.max(0.0)
+    } else {
+        Policy::DEFAULT.approach_m
+    };
     match previous_gap {
         Some(gap) if gap.is_finite() && gap > 0.0 => asked.min(gap * 0.5),
         _ => asked,
@@ -472,7 +481,8 @@ mod tests {
         // (the first stop is the one the bus pulls out of)
         assert_eq!(preview_entry(&hof, 0, "terminus", 0), None);
         // (a depot file of one recording per stop, and a route it has no list for)
-        hof.info_busstop_lists.push(list(&["Alpha", "Beta", "Gamma", "Delta", "Epsilon"]));
+        hof.info_busstop_lists
+            .push(list(&["Alpha", "Beta", "Gamma", "Delta", "Epsilon"]));
         assert_eq!(preview_entry(&hof, 1, "Beta", 1), None);
         assert_eq!(preview_entry(&hof, 2, "Beta", 1), None);
     }
@@ -487,18 +497,32 @@ mod tests {
         assert_eq!(approach_metres(120.0, None), 120.0);
         // (nonsense from a hand-edited options file: the default, and never negative)
         assert_eq!(approach_metres(-5.0, None), 0.0);
-        assert_eq!(approach_metres(f32::NAN, Some(0.0)), Policy::DEFAULT.approach_m);
+        assert_eq!(
+            approach_metres(f32::NAN, Some(0.0)),
+            Policy::DEFAULT.approach_m
+        );
     }
 
     #[test]
     fn the_default_policy_is_what_omsi_2_does() {
         assert_eq!(Policy::default(), Policy::DEFAULT);
         assert!(Policy::DEFAULT.departure && Policy::DEFAULT.arrival);
-        assert!(!Policy::DEFAULT.approach, "an approach announcement is a city's own custom");
+        assert!(
+            !Policy::DEFAULT.approach,
+            "an approach announcement is a city's own custom"
+        );
         assert_eq!(Policy::DEFAULT.approach_m, 120.0);
         assert!(Policy::DEFAULT.any());
         // (every box off: nothing is pressed)
-        assert!(!Policy { departure: false, arrival: false, approach: false, approach_m: 120.0 }.any());
+        assert!(
+            !Policy {
+                departure: false,
+                arrival: false,
+                approach: false,
+                approach_m: 120.0
+            }
+            .any()
+        );
     }
 
     #[test]

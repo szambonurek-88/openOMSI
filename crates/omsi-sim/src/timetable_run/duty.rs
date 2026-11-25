@@ -690,7 +690,11 @@ impl PlayerDuty {
         let trip = self.trip();
         let here = self.position?;
         let next = trip.stops.get(self.next_stop)?.position?;
-        let before = self.next_stop.checked_sub(1).and_then(|k| trip.stops.get(k)).and_then(|s| s.position);
+        let before = self
+            .next_stop
+            .checked_sub(1)
+            .and_then(|k| trip.stops.get(k))
+            .and_then(|s| s.position);
         let length = |a: glam::DVec3, b: glam::DVec3| (b - a).truncate().length() as f32;
         Some((length(here, next), before.map(|p| length(p, next))))
     }
