@@ -14,23 +14,6 @@ const MODS_OWN: [&str; 6] = [
     ".installed-records",
 ];
 
-/// The names a folder at the top of a content root has in the game, so a mod folder that
-/// holds only one of them is a mod of its own and not a wrapper around one.
-const CONTENT_TOP: [&str; 12] = [
-    "vehicles",
-    "sceneryobjects",
-    "splines",
-    "maps",
-    "archives",
-    "plugins",
-    "addons",
-    "fonts",
-    "texture",
-    "sound",
-    "ticketpacks",
-    "humans",
-];
-
 /// The mod folders of `<content>/Mods`, in name order, each the root a mod is used from:
 /// a pack dropped there as it came (`Mods/MyPack/Vehicles/...`) is not merged into the
 /// content folder's tree. A pack that was unzipped with its own folder inside
@@ -66,7 +49,10 @@ pub fn mod_dirs(content: &Path) -> Vec<PathBuf> {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                if CONTENT_TOP.iter().any(|t| iname.eq_ignore_ascii_case(t)) {
+                if crate::CONTENT_FOLDERS
+                    .iter()
+                    .any(|t| iname.eq_ignore_ascii_case(t))
+                {
                     out.push(p);
                 } else {
                     out.push(one.clone());

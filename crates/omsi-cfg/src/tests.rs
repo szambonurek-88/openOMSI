@@ -399,7 +399,8 @@ fn a_mod_folder_in_mods_is_a_content_root_of_its_own() {
 }
 
 /// A folder of a mod whose only child is one the game has at the top of a content root is a
-/// mod itself (`Mods/Textures/Texture/...` lies at `Mods/Textures`, not at the inner folder).
+/// mod itself (`Mods/Winter/Texture/...` and `Mods/Audio/Sounds/...` lie at the mod folder,
+/// not at the inner content folder).
 #[test]
 fn a_mod_folder_with_one_top_level_name_is_its_own_root() {
     let dir = std::env::temp_dir().join(format!("omsi-mod-top-{}", std::process::id()));
@@ -410,6 +411,15 @@ fn a_mod_folder_with_one_top_level_name_is_its_own_root() {
         b"dds",
     )
     .unwrap();
-    assert_eq!(mod_dirs(&content), vec![content.join("Mods/Winter")]);
+    std::fs::create_dir_all(content.join("Mods/Audio").join("Sounds")).unwrap();
+    std::fs::write(
+        content.join("Mods/Audio").join("Sounds").join("engine.wav"),
+        b"wav",
+    )
+    .unwrap();
+    assert_eq!(
+        mod_dirs(&content),
+        vec![content.join("Mods/Audio"), content.join("Mods/Winter")]
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
