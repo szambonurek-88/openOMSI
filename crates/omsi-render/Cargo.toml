@@ -23,6 +23,8 @@ rayon.workspace = true
 hashbrown.workspace = true
 log.workspace = true
 anyhow.workspace = true
+# (the moon's map, `moon_map`)
+image.workspace = true
 winit.workspace = true
 
 [target.'cfg(windows)'.dependencies]

@@ -16,7 +16,7 @@ window-free model `crates/omsi-launcher-model`. The game has no launcher window 
   and reads the city map with a trip's route the way the
   navigator does (`mapview::export`), which the page draws;
   `src/i18n.rs` hands the page the game's translation tables
-  (`crates/omsi-app/locales/app.yml`, the English text is the key).
+  (`crates/omsi-app/locales/app.<language>.yml`, the English text is the key).
 * `ui/` - the page: Preact with htm from one vendored file, no build step and no npm
   (`ui/vendor/README.md` lists the third-party files). `js/pages/*.js` are the pages,
   `js/ui.js` the controls, `js/data.js` the duty and the content, `styles.css` the look.
@@ -82,6 +82,20 @@ checks**. These checks render the real page with local command fixtures; they co
 validation, full and unavailable sessions, continuing while status is pending, stale queries,
 the server list, code-only and address dialogs, cancellation restoring the duty, and host setup.
 They do not start a game, query a remote server, or change a real saved duty.
+
+## Settings navigation
+
+Settings uses persistent categories and smaller topic pages. Graphics profiles remain under
+**Settings → Graphics → Profiles**, with save, load, delete, import and export controls. Search
+includes all available settings and custom blocks such as graphics profiles. Each topic shows
+all applicable options. Use a setting's star to keep it in
+**Favourite settings**, stored locally by the launcher. The original settings values, platform
+conditions and automatic saving are unchanged.
+
+Serve `launcher/` and open `/tests/settings-navigation-check.html` to check the real controls
+against local command fixtures. The checks cover every original schema row, profile management,
+profile allowlists, search, favourites, conditional visibility and setting writes. They also run
+through `node launcher/tests/drive-check.mjs` in the existing interface check matrix.
 
 ## Sharing graphics profiles
 

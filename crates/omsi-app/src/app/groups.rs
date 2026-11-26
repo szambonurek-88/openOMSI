@@ -43,6 +43,12 @@ pub(crate) struct VrState {
     pub(crate) vr_zoom_active: bool,
 }
 
+/// The bus path the host check last saw.
+#[derive(Default)]
+pub(crate) struct HostBusCheck {
+    pub(crate) path: Option<std::path::PathBuf>,
+}
+
 /// The multiplayer session: the LAN or server connection and the other players seen in it.
 /// (none at the start)
 #[derive(Default)]
@@ -64,6 +70,20 @@ pub(crate) struct NetState {
     /// Set only by the dedicated server's teleport capability response.
     /// None means an older server or a player-hosted LAN session.
     pub(crate) dedicated_teleport: Option<bool>,
+    /// The buses the session we host drives, from `--session-buses` (#1464), parsed once:
+    /// empty, every bus.
+    pub(crate) session_buses: Option<Vec<String>>,
+    /// Peers whose vehicle has already been checked against `session_buses` (#1464).
+    pub(crate) session_buses_checked: std::collections::HashMap<u32, String>,
+    /// The host's own vehicle checked against `session_buses` (#1464), so a path is read only
+    /// when the vehicle changes.
+    pub(crate) host_bus_checked: Option<HostBusCheck>,
+    /// Who of the other players serves our bus's cash desk (#2859): the conductor we named.
+    pub(crate) crew: omsi_lan::crew::Crew,
+    /// Whose bus another player is the conductor of, as each bus's driver announces it
+    /// (#2859): the bus owner's number -> the conductor's.
+    pub(crate) conductors: std::collections::HashMap<u32, u32>,
+
     pub(crate) mods_server: Option<omsi_lan::mods::Server>,
     pub(crate) remotes: lan::LanGame,
     /// The shared world: the host's traffic and people, sent (host) or mirrored (client).
@@ -74,7 +94,7 @@ pub(crate) struct NetState {
 /// website's "playing now" and the look for a newer release.
 pub(crate) struct Integrations {
     /// Keys pressed (true) and let go since the Lua plugins' last frame.
-    pub(crate) plugin_keys: Vec<(String, bool)>,
+    pub(crate) plugin_keys: Vec<omsi_plugin::KeyEvent>,
     /// What happened since the Lua plugins' last frame: crashes, people knocked down,
     /// stops skipped, services and moves of the bus, trips ended, jolts, tickets sold (see
     /// `plugins::queue_event`).
@@ -122,6 +142,13 @@ pub(crate) struct Integrations {
 /// the log.
 pub(crate) struct PerfState {
     pub(crate) fps: f32,
+    /// Frame generation: its count when the last second ended, and the frames it made in that second.
+    pub(crate) generated: (u64, f32),
+    /// Frame rate readings in a row with frame generation on and under 30 drawn frames a second;
+    /// at `GENERATION_SLOW_READINGS` it is off for the drive.
+    pub(crate) generation_too_slow: u8,
+    /// When frame generation made its first frame this drive (None: it has made none).
+    pub(crate) generation_since: Option<Instant>,
     /// Per-stage frame time accumulators (OMSI_PROFILE), seconds.
     pub(crate) profile: crate::profile_keys::ProfileTimes,
     /// `profile` as it was at the start of the last frame: what a slow frame spent where.
@@ -176,6 +203,9 @@ impl PerfState {
     pub(crate) fn new(input_script: Vec<(f32, String)>, fps_t: Instant) -> PerfState {
         PerfState {
             fps: 0.0,
+            generated: (0, 0.0),
+            generation_too_slow: 0,
+            generation_since: None,
             profile: Default::default(),
             profile_prev: Default::default(),
             total_frames: 0,
@@ -442,6 +472,8 @@ pub(crate) struct MenuState {
     pub(crate) online_weather: std::cell::OnceCell<Vec<(String, String)>>,
     /// (manufacturer, type) of each vehicle of `vehicle_list`, by its path.
     pub(crate) vehicle_meta: std::collections::HashMap<String, (String, String)>,
+    /// (description, standard paint's name) of each vehicle of `vehicle_list`, by its path.
+    pub(crate) vehicle_about: std::collections::HashMap<String, (String, String)>,
     pub(crate) hud: Option<hud::Hud>,
     /// The route navigator (ETS2-style map in a corner).
     pub(crate) navigator: Option<navigator::Navigator>,
@@ -470,6 +502,8 @@ pub(crate) struct MenuState {
     pub(crate) pane_scroll: Option<(usize, usize)>,
     /// The digits of a time being typed in the world page of the game menu (None: not typing).
     pub(crate) menu_edit: Option<String>,
+    /// (loaded at the start of the next frame, where the event loop can end this session)
+    pub(crate) load_request: Option<std::path::PathBuf>,
     pub(crate) menu_edit_icao: bool,
     /// The fleet number being edited in the vehicle page
     pub(crate) menu_edit_number: bool,
@@ -484,6 +518,8 @@ pub(crate) struct MenuState {
     /// (the game menu's "Swap for another vehicle", #728).
     pub(crate) swap_pending: bool,
     pub(crate) swapped_in: Option<u64>,
+    /// The taking of a server's parked bus under way (`on_foot::parked`).
+    pub(crate) parked_transfer: Option<crate::on_foot::ParkedTransfer>,
     /// The vehicle chosen being read on a worker thread (see `App::place_vehicle`).
     pub(crate) pending_placement: Option<crate::spawn::PendingPlacement>,
     /// The line of the open list whose slider the mouse button holds (it follows the cursor).
