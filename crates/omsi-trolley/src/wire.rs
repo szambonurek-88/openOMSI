@@ -13,9 +13,11 @@ use hashbrown::HashMap;
 use std::sync::Mutex;
 
 mod arcs;
+mod crossings;
 mod radio;
 mod sounds;
 pub use arcs::ArcRule;
+pub use crossings::Crossing;
 pub use sounds::{SoundChoice, WireSounds};
 
 /// Where a shoe's contact point lies: on this span, this far (m) from its first point, on the
@@ -58,8 +60,16 @@ fn mitres(pts: &[DVec3]) -> Vec<DVec3> {
     let n = pts.len();
     (0..n)
         .map(|i| {
-            let a = if i > 0 { right_of(pts[i] - pts[i - 1]) } else { right_of(pts[1] - pts[0]) };
-            let b = if i + 1 < n { right_of(pts[i + 1] - pts[i]) } else { a };
+            let a = if i > 0 {
+                right_of(pts[i] - pts[i - 1])
+            } else {
+                right_of(pts[1] - pts[0])
+            };
+            let b = if i + 1 < n {
+                right_of(pts[i + 1] - pts[i])
+            } else {
+                a
+            };
             let m = (a + b).normalize_or(a);
             let c = m.dot(a).max(0.5);
             m / c
@@ -95,13 +105,19 @@ impl Span {
         let h = self.spacing as f64 * 0.5 * if side == 0 { 1.0 } else { -1.0 };
         let a = self.pts[i] + self.mit[i] * h;
         let b = self.pts[i + 1] + self.mit[i + 1] * h;
-        (a.lerp(b, t), (self.pts[i + 1] - self.pts[i]).normalize_or(DVec3::X))
+        (
+            a.lerp(b, t),
+            (self.pts[i + 1] - self.pts[i]).normalize_or(DVec3::X),
+        )
     }
 
     /// The end points of segment `i` of the wire of `side`.
     pub fn wire_segment(&self, i: usize, side: u8) -> (DVec3, DVec3) {
         let h = self.spacing as f64 * 0.5 * if side == 0 { 1.0 } else { -1.0 };
-        (self.pts[i] + self.mit[i] * h, self.pts[i + 1] + self.mit[i + 1] * h)
+        (
+            self.pts[i] + self.mit[i] * h,
+            self.pts[i + 1] + self.mit[i + 1] * h,
+        )
     }
 }
 
@@ -210,7 +226,10 @@ impl SwitchDef {
                 if r.radio != 0 {
                     return Some(side(r.radio));
                 }
-                self.routes.iter().find(|(c, _)| r.code != 0 && *c == r.code).map(|(_, w)| self.is_branch(*w))
+                self.routes
+                    .iter()
+                    .find(|(c, _)| r.code != 0 && *c == r.code)
+                    .map(|(_, w)| self.is_branch(*w))
             }
         }
     }
@@ -263,13 +282,23 @@ pub struct WireNet {
     pub spans: Vec<Span>,
     pub nodes: Vec<Node>,
     pub switches: Vec<SwitchDef>,
+    /// Interior conductor intersections, including frogs' inner crossings; joined endpoints excluded.
+    pub crossings: Vec<Crossing>,
+    /// The crossings on each span: the crossing and where on the span it is.
+    span_crossings: Vec<Vec<(u32, f64)>>,
     grid: HashMap<(i32, i32), Vec<u32>>,
     dynamic: Mutex<Dyn>,
 }
 
 impl std::fmt::Debug for WireNet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "WireNet({} spans, {} nodes, {} switches)", self.spans.len(), self.nodes.len(), self.switches.len())
+        write!(
+            f,
+            "WireNet({} spans, {} nodes, {} switches)",
+            self.spans.len(),
+            self.nodes.len(),
+            self.switches.len()
+        )
     }
 }
 
@@ -295,7 +324,10 @@ pub fn right_of(t: DVec3) -> DVec3 {
 
 /// The numbers after the first word of a line.
 fn numbers(l: &str) -> Vec<f64> {
-    l.split_whitespace().skip(1).filter_map(|w| w.replace(',', ".").parse::<f64>().ok()).collect()
+    l.split_whitespace()
+        .skip(1)
+        .filter_map(|w| w.replace(',', ".").parse::<f64>().ok())
+        .collect()
 }
 
 fn words(l: &str) -> Vec<&str> {
@@ -373,7 +405,11 @@ impl WireNet {
         let mut block = String::new();
         let mut sec: Option<Section> = None;
         let mut insulator: Option<(DVec3, f32)> = None;
-        let flush = |block: &str, sec: &mut Option<Section>, ins: &mut Option<(DVec3, f32)>, sections: &mut Vec<Section>, insulators: &mut Vec<(DVec3, f32)>| {
+        let flush = |block: &str,
+                     sec: &mut Option<Section>,
+                     ins: &mut Option<(DVec3, f32)>,
+                     sections: &mut Vec<Section>,
+                     insulators: &mut Vec<(DVec3, f32)>| {
             if block == "trolley_section" {
                 if let Some(s) = sec.take() {
                     sections.push(s);
@@ -391,15 +427,40 @@ impl WireNet {
                 continue;
             }
             if let Some(k) = l.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
-                flush(&block, &mut sec, &mut insulator, &mut sections, &mut insulators);
+                flush(
+                    &block,
+                    &mut sec,
+                    &mut insulator,
+                    &mut sections,
+                    &mut insulators,
+                );
                 block = k.trim().to_ascii_lowercase();
                 match block.as_str() {
-                    "trolley_section" => sec = Some(Section { id: sections.len() as i32 + 1, name: String::new(), live: true, regen_kw: 0.0, feeder_ohm: 0.05 }),
-                    "trolley_span" => spans.push(RawSpan { section: 0, spacing: None, pts: Vec::new() }),
+                    "trolley_section" => {
+                        sec = Some(Section {
+                            id: sections.len() as i32 + 1,
+                            name: String::new(),
+                            live: true,
+                            regen_kw: 0.0,
+                            feeder_ohm: 0.05,
+                        })
+                    }
+                    "trolley_span" => spans.push(RawSpan {
+                        section: 0,
+                        spacing: None,
+                        pts: Vec::new(),
+                    }),
                     "trolley_switch" => switches.push(RawSwitch {
-                        name: String::new(), pos: DVec3::ZERO, mode: SwitchMode::Power,
-                        trigger: 9.0, sense: 12.0, invert: false, initial: String::new(),
-                        routes: Vec::new(), channel: None, radio_range: 150.0,
+                        name: String::new(),
+                        pos: DVec3::ZERO,
+                        mode: SwitchMode::Power,
+                        trigger: 9.0,
+                        sense: 12.0,
+                        invert: false,
+                        initial: String::new(),
+                        routes: Vec::new(),
+                        channel: None,
+                        radio_range: 150.0,
                     }),
                     "trolley_insulator" => insulator = Some((DVec3::ZERO, DEFAULT_INSULATOR)),
                     _ => {}
@@ -414,13 +475,19 @@ impl WireNet {
                 "trolley_sounds" => match key.as_str() {
                     "frog" => sounds.frog = SoundChoice::parse(&w[1..]),
                     "switch" => sounds.switch = SoundChoice::parse(&w[1..]),
-                    "hiss" | "snap" | "click" | "thud" | "clack" => log::warn!("trolley.txt [trolley_sounds]: '{key}' is the vehicle's sound, set in its sound.cfg; ignored here"),
+                    "hiss" | "snap" | "click" | "thud" | "clack" => log::warn!(
+                        "trolley.txt [trolley_sounds]: '{key}' is the vehicle's sound, set in its sound.cfg; ignored here"
+                    ),
                     _ => {}
                 },
                 "trolley_net" => match key.as_str() {
-                    "voltage" => nominal = n.first().copied().unwrap_or(600.0).clamp(100.0, 3000.0) as f32,
+                    "voltage" => {
+                        nominal = n.first().copied().unwrap_or(600.0).clamp(100.0, 3000.0) as f32
+                    }
                     "spacing" => spacing = n.first().copied().unwrap_or(0.6).clamp(0.2, 2.0) as f32,
-                    "roughness" => roughness = n.first().copied().unwrap_or(0.0012).clamp(0.0, 0.05) as f32,
+                    "roughness" => {
+                        roughness = n.first().copied().unwrap_or(0.0012).clamp(0.0, 0.05) as f32
+                    }
                     other => {
                         if let Some(rest) = other.strip_prefix("frog_arc_") {
                             frog_arc.set(rest, n.first().copied());
@@ -435,8 +502,13 @@ impl WireNet {
                             "id" => s.id = n.first().copied().unwrap_or(0.0) as i32,
                             "name" => s.name = l[w[0].len()..].trim().to_string(),
                             "live" => s.live = !matches!(first, "0" | "false" | "no" | "off"),
-                            "regen_kw" => s.regen_kw = n.first().copied().unwrap_or(0.0).max(0.0) as f32,
-                            "feeder_ohm" => s.feeder_ohm = n.first().copied().unwrap_or(0.05).clamp(0.0, 5.0) as f32,
+                            "regen_kw" => {
+                                s.regen_kw = n.first().copied().unwrap_or(0.0).max(0.0) as f32
+                            }
+                            "feeder_ohm" => {
+                                s.feeder_ohm =
+                                    n.first().copied().unwrap_or(0.05).clamp(0.0, 5.0) as f32
+                            }
                             _ => {}
                         }
                     }
@@ -464,12 +536,16 @@ impl WireNet {
                                     _ => SwitchMode::Power,
                                 }
                             }
-                            "trigger" => s.trigger = n.first().copied().unwrap_or(9.0).clamp(0.5, 60.0) as f32,
+                            "trigger" => {
+                                s.trigger =
+                                    n.first().copied().unwrap_or(9.0).clamp(0.5, 60.0) as f32
+                            }
                             "sense" => s.sense = n.first().copied().unwrap_or(12.0).max(0.0) as f32,
                             "invert" => s.invert = !matches!(first, "0" | "false" | "no" | "off"),
                             "initial" => s.initial = first.to_ascii_lowercase(),
                             "route" => {
-                                let way = match w.get(2).map(|x| x.to_ascii_lowercase()).as_deref() {
+                                let way = match w.get(2).map(|x| x.to_ascii_lowercase()).as_deref()
+                                {
                                     Some("straight") => Some(SwitchWay::Straight),
                                     Some("branch") => Some(SwitchWay::Branch),
                                     Some("left") => Some(SwitchWay::Left),
@@ -478,11 +554,22 @@ impl WireNet {
                                 };
                                 match (first.parse::<u32>().ok(), way) {
                                     (Some(code), Some(way)) => s.routes.push((code, way)),
-                                    _ => log::warn!("trolley.txt: switch '{}': 'route' wants a code and straight, branch, left or right", s.name),
+                                    _ => log::warn!(
+                                        "trolley.txt: switch '{}': 'route' wants a code and straight, branch, left or right",
+                                        s.name
+                                    ),
                                 }
                             }
                             "channel" => s.channel = first.parse::<u32>().ok(),
-                            "range" => s.radio_range = n.first().copied().filter(|range| range.is_finite()).unwrap_or(150.0).clamp(1.0, 1000.0) as f32,
+                            "range" => {
+                                s.radio_range = n
+                                    .first()
+                                    .copied()
+                                    .filter(|range| range.is_finite())
+                                    .unwrap_or(150.0)
+                                    .clamp(1.0, 1000.0)
+                                    as f32
+                            }
                             _ => {}
                         }
                     }
@@ -491,7 +578,9 @@ impl WireNet {
                     if let Some(i) = insulator.as_mut() {
                         match key.as_str() {
                             "pos" if n.len() >= 3 => i.0 = DVec3::new(n[0], n[1], n[2]),
-                            "length" => i.1 = n.first().copied().unwrap_or(0.8).clamp(0.0, 20.0) as f32,
+                            "length" => {
+                                i.1 = n.first().copied().unwrap_or(0.8).clamp(0.0, 20.0) as f32
+                            }
                             _ => {}
                         }
                     }
@@ -499,9 +588,21 @@ impl WireNet {
                 _ => {}
             }
         }
-        flush(&block, &mut sec, &mut insulator, &mut sections, &mut insulators);
+        flush(
+            &block,
+            &mut sec,
+            &mut insulator,
+            &mut sections,
+            &mut insulators,
+        );
         if sections.is_empty() {
-            sections.push(Section { id: 0, name: "all".into(), live: true, regen_kw: 0.0, feeder_ohm: 0.05 });
+            sections.push(Section {
+                id: 0,
+                name: "all".into(),
+                live: true,
+                regen_kw: 0.0,
+                feeder_ohm: 0.05,
+            });
         }
         let mut net = WireNet {
             nominal_volts: nominal,
@@ -515,8 +616,18 @@ impl WireNet {
             spans: Vec::new(),
             nodes: Vec::new(),
             switches: Vec::new(),
+            crossings: Vec::new(),
+            span_crossings: Vec::new(),
             grid: HashMap::new(),
-            dynamic: Mutex::new(Dyn { live: Vec::new(), current: Vec::new(), accum: Vec::new(), branch: Vec::new(), lock: Vec::new(), since: Vec::new(), switch_sounds: Vec::new() }),
+            dynamic: Mutex::new(Dyn {
+                live: Vec::new(),
+                current: Vec::new(),
+                accum: Vec::new(),
+                branch: Vec::new(),
+                lock: Vec::new(),
+                since: Vec::new(),
+                switch_sounds: Vec::new(),
+            }),
         };
         for r in spans {
             if r.pts.len() < 2 {
@@ -541,12 +652,24 @@ impl WireNet {
             for w in pts.windows(2) {
                 cum.push(cum.last().unwrap() + w[0].distance(w[1]));
             }
-            let section = net.sections.iter().position(|s| s.id == r.section).unwrap_or(0);
+            let section = net
+                .sections
+                .iter()
+                .position(|s| s.id == r.section)
+                .unwrap_or(0);
             let mit = mitres(&pts);
-            net.spans.push(Span { section, pts, cum, spacing: r.spacing.unwrap_or(spacing), ends: [0, 0], mit });
+            net.spans.push(Span {
+                section,
+                pts,
+                cum,
+                spacing: r.spacing.unwrap_or(spacing),
+                ends: [0, 0],
+                mit,
+            });
         }
         net.build_nodes(&switches, &insulators);
         net.build_grid();
+        net.build_crossings();
         let d = Dyn {
             live: net.sections.iter().map(|s| s.live).collect(),
             current: vec![0.0; net.sections.len()],
@@ -566,10 +689,15 @@ impl WireNet {
         // (a grid of the nodes so far, cells of the joining distance: a map's wire has thousands
         // of span ends, and a search through all of them for each was a pause at the spawn)
         let cell = |p: DVec3| ((p.x / JOIN).floor() as i64, (p.y / JOIN).floor() as i64);
-        let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
+        let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> =
+            std::collections::HashMap::new();
         for si in 0..self.spans.len() {
             for end in 0..2u8 {
-                let p = if end == 0 { self.spans[si].pts[0] } else { *self.spans[si].pts.last().unwrap() };
+                let p = if end == 0 {
+                    self.spans[si].pts[0]
+                } else {
+                    *self.spans[si].pts.last().unwrap()
+                };
                 let (cx, cy) = cell(p);
                 let found = (-1..=1)
                     .flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy)))
@@ -582,7 +710,12 @@ impl WireNet {
                     .filter(|i| !(end == 1 && nodes[*i].ends.contains(&(si as u32, 0))))
                     .min();
                 let ni = found.unwrap_or_else(|| {
-                    nodes.push(Node { pos: p, ends: Vec::new(), insulator: 0.0, switch: None });
+                    nodes.push(Node {
+                        pos: p,
+                        ends: Vec::new(),
+                        insulator: 0.0,
+                        switch: None,
+                    });
                     grid.entry((cx, cy)).or_default().push(nodes.len() - 1);
                     nodes.len() - 1
                 });
@@ -598,13 +731,21 @@ impl WireNet {
             }
             let pt = |e: &(u32, u8)| {
                 let s = &self.spans[e.0 as usize];
-                if e.1 == 0 { s.pts[0] } else { *s.pts.last().unwrap() }
+                if e.1 == 0 {
+                    s.pts[0]
+                } else {
+                    *s.pts.last().unwrap()
+                }
             };
             let c = n.ends.iter().map(pt).sum::<DVec3>() / n.ends.len() as f64;
             n.pos = c;
             for (si, end) in &n.ends {
                 let s = &mut self.spans[*si as usize];
-                if *end == 0 { s.pts[0] = c } else { *s.pts.last_mut().unwrap() = c }
+                if *end == 0 {
+                    s.pts[0] = c
+                } else {
+                    *s.pts.last_mut().unwrap() = c
+                }
                 touched.push(*si as usize);
             }
         }
@@ -612,26 +753,53 @@ impl WireNet {
         touched.dedup();
         for si in touched {
             let s = &mut self.spans[si];
-            s.cum = std::iter::once(0.0).chain(s.pts.windows(2).scan(0.0, |a, w| { *a += w[0].distance(w[1]); Some(*a) })).collect();
+            s.cum = std::iter::once(0.0)
+                .chain(s.pts.windows(2).scan(0.0, |a, w| {
+                    *a += w[0].distance(w[1]);
+                    Some(*a)
+                }))
+                .collect();
             s.mit = mitres(&s.pts);
         }
         // where two sections meet there is a dead stretch, unless an insulator says how long
         for n in nodes.iter_mut() {
             let first = n.ends.first().map(|e| self.spans[e.0 as usize].section);
-            if n.ends.iter().any(|e| Some(self.spans[e.0 as usize].section) != first) {
+            if n.ends
+                .iter()
+                .any(|e| Some(self.spans[e.0 as usize].section) != first)
+            {
                 n.insulator = DEFAULT_INSULATOR;
             }
         }
         for (pos, len) in insulators {
-            if let Some(n) = nodes.iter_mut().filter(|n| n.pos.distance(*pos) < 2.0).min_by(|a, b| a.pos.distance(*pos).total_cmp(&b.pos.distance(*pos))) {
+            if let Some(n) = nodes
+                .iter_mut()
+                .filter(|n| n.pos.distance(*pos) < 2.0)
+                .min_by(|a, b| a.pos.distance(*pos).total_cmp(&b.pos.distance(*pos)))
+            {
                 n.insulator = *len;
             }
         }
         self.nodes = nodes;
         self.share_offsets_at_nodes();
         for r in raw_switches {
-            let Some(ni) = (0..self.nodes.len()).filter(|i| self.nodes[*i].ends.len() == 3 && self.nodes[*i].pos.distance(r.pos) < 3.0).min_by(|a, b| self.nodes[*a].pos.distance(r.pos).total_cmp(&self.nodes[*b].pos.distance(r.pos))) else {
-                log::warn!("trolley switch '{}' at ({:.1}, {:.1}) has no joint of three spans", r.name, r.pos.x, r.pos.y);
+            let Some(ni) = (0..self.nodes.len())
+                .filter(|i| {
+                    self.nodes[*i].ends.len() == 3 && self.nodes[*i].pos.distance(r.pos) < 3.0
+                })
+                .min_by(|a, b| {
+                    self.nodes[*a]
+                        .pos
+                        .distance(r.pos)
+                        .total_cmp(&self.nodes[*b].pos.distance(r.pos))
+                })
+            else {
+                log::warn!(
+                    "trolley switch '{}' at ({:.1}, {:.1}) has no joint of three spans",
+                    r.name,
+                    r.pos.x,
+                    r.pos.y
+                );
                 continue;
             };
             let ends = self.nodes[ni].ends.clone();
@@ -639,13 +807,22 @@ impl WireNet {
             // the toe points away from the other two
             let toe_i = (0..3)
                 .min_by(|a, b| {
-                    let score = |i: usize| (0..3).filter(|j| *j != i).map(|j| dirs[i].dot(dirs[j])).sum::<f64>();
+                    let score = |i: usize| {
+                        (0..3)
+                            .filter(|j| *j != i)
+                            .map(|j| dirs[i].dot(dirs[j]))
+                            .sum::<f64>()
+                    };
                     score(*a).total_cmp(&score(*b))
                 })
                 .unwrap();
             let others: Vec<usize> = (0..3).filter(|i| *i != toe_i).collect();
             let fwd = -dirs[toe_i];
-            let (s_i, b_i) = if dirs[others[0]].dot(fwd) >= dirs[others[1]].dot(fwd) { (others[0], others[1]) } else { (others[1], others[0]) };
+            let (s_i, b_i) = if dirs[others[0]].dot(fwd) >= dirs[others[1]].dot(fwd) {
+                (others[0], others[1])
+            } else {
+                (others[1], others[0])
+            };
             let branch_right = fwd.x * dirs[b_i].y - fwd.y * dirs[b_i].x < 0.0;
             let sw = SwitchDef {
                 name: r.name.clone(),
@@ -710,13 +887,25 @@ impl WireNet {
                 continue;
             }
             // (three spans: a switch, and the way from its toe)
-            let reference = if ends.len() == 3 { self.toe_of(&ends) } else { ends[0] };
+            let reference = if ends.len() == 3 {
+                self.toe_of(&ends)
+            } else {
+                ends[0]
+            };
             let shared = right_of(-self.end_dir(reference));
             for (si, end) in ends {
                 let s = &mut self.spans[si as usize];
                 let n = s.pts.len();
-                let (idx, own) = if end == 0 { (0, right_of(s.pts[1] - s.pts[0])) } else { (n - 1, right_of(s.pts[n - 1] - s.pts[n - 2])) };
-                s.mit[idx] = if own.dot(shared) >= 0.0 { shared } else { -shared };
+                let (idx, own) = if end == 0 {
+                    (0, right_of(s.pts[1] - s.pts[0]))
+                } else {
+                    (n - 1, right_of(s.pts[n - 1] - s.pts[n - 2]))
+                };
+                s.mit[idx] = if own.dot(shared) >= 0.0 {
+                    shared
+                } else {
+                    -shared
+                };
             }
         }
     }
@@ -726,7 +915,12 @@ impl WireNet {
         let dirs: Vec<DVec3> = ends.iter().map(|e| self.end_dir(*e)).collect();
         let toe = (0..ends.len())
             .min_by(|a, b| {
-                let score = |i: usize| (0..dirs.len()).filter(|j| *j != i).map(|j| dirs[i].dot(dirs[j])).sum::<f64>();
+                let score = |i: usize| {
+                    (0..dirs.len())
+                        .filter(|j| *j != i)
+                        .map(|j| dirs[i].dot(dirs[j]))
+                        .sum::<f64>()
+                };
                 score(*a).total_cmp(&score(*b))
             })
             .unwrap_or(0);
@@ -755,7 +949,11 @@ impl WireNet {
     pub fn end_dir(&self, e: (u32, u8)) -> DVec3 {
         let s = &self.spans[e.0 as usize];
         let n = s.pts.len();
-        let d = if e.1 == 0 { s.pts[1] - s.pts[0] } else { s.pts[n - 2] - s.pts[n - 1] };
+        let d = if e.1 == 0 {
+            s.pts[1] - s.pts[0]
+        } else {
+            s.pts[n - 2] - s.pts[n - 1]
+        };
         horizontal(d).normalize_or(DVec3::X)
     }
 
@@ -765,7 +963,10 @@ impl WireNet {
 
     /// The spans with a point within `radius` of `p` (horizontally, up to the grid's cell).
     pub fn near(&self, p: DVec3, radius: f64) -> Vec<u32> {
-        let (c0, c1) = (cell_of(p - DVec3::splat(radius)), cell_of(p + DVec3::splat(radius)));
+        let (c0, c1) = (
+            cell_of(p - DVec3::splat(radius)),
+            cell_of(p + DVec3::splat(radius)),
+        );
         let mut out: Vec<u32> = Vec::new();
         for cx in c0.0..=c1.0 {
             for cy in c0.1..=c1.1 {
@@ -820,7 +1021,13 @@ impl WireNet {
     }
 
     pub fn section_live(&self, section: usize) -> bool {
-        self.dynamic.lock().unwrap().live.get(section).copied().unwrap_or(false)
+        self.dynamic
+            .lock()
+            .unwrap()
+            .live
+            .get(section)
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Section by its id in the file.
@@ -838,7 +1045,12 @@ impl WireNet {
     /// The step's currents become the ones the voltage drop is worked out with.
     pub fn end_step(&self, dt: f32) {
         let mut d = self.dynamic.lock().unwrap();
-        let Dyn { current, accum, lock, .. } = &mut *d;
+        let Dyn {
+            current,
+            accum,
+            lock,
+            ..
+        } = &mut *d;
         for (c, a) in current.iter_mut().zip(accum.iter_mut()) {
             *c = *a;
             *a = 0.0;
@@ -866,7 +1078,8 @@ impl WireNet {
         if !d.live.get(section).copied().unwrap_or(false) {
             return 0.0;
         }
-        let drawn = d.current.get(section).copied().unwrap_or(0.0).max(0.0) * self.nominal_volts * 1e-3;
+        let drawn =
+            d.current.get(section).copied().unwrap_or(0.0).max(0.0) * self.nominal_volts * 1e-3;
         self.sections.get(section).map_or(0.0, |s| s.regen_kw) + drawn
     }
 
@@ -880,14 +1093,25 @@ impl WireNet {
     }
 
     pub fn switch_branch(&self, sw: usize) -> bool {
-        self.dynamic.lock().unwrap().branch.get(sw).copied().unwrap_or(false)
+        self.dynamic
+            .lock()
+            .unwrap()
+            .branch
+            .get(sw)
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Each `initial random` switch takes a way at random, without a movement or its sound.
     /// The caller decides when: the players of an online game do not share this draw.
     pub fn draw_random_switches(&mut self) {
         let d = self.dynamic.get_mut().unwrap();
-        for (i, s) in self.switches.iter_mut().enumerate().filter(|(_, s)| s.initial_random) {
+        for (i, s) in self
+            .switches
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, s)| s.initial_random)
+        {
             let draw = std::collections::hash_map::RandomState::new(); // reseeded per call
             s.initial_branch = std::hash::BuildHasher::hash_one(&draw, i) & 1 == 1;
             d.branch[i] = s.initial_branch;
@@ -896,7 +1120,11 @@ impl WireNet {
 
     pub fn set_switch(&self, sw: usize, branch: bool) {
         if let Some(switch) = self.switches.get(sw) {
-            self.dynamic.lock().unwrap().move_switch(sw, branch, self.nodes[switch.node as usize].pos);
+            self.dynamic.lock().unwrap().move_switch(
+                sw,
+                branch,
+                self.nodes[switch.node as usize].pos,
+            );
         }
     }
 
@@ -909,12 +1137,22 @@ impl WireNet {
     pub fn switch_for_display(&self, pos: DVec3, names: &[String]) -> Option<usize> {
         self.switches
             .iter()
-            .position(|switch| !switch.name.trim().is_empty() && names.iter().any(|name| name.trim().eq_ignore_ascii_case(switch.name.trim())))
+            .position(|switch| {
+                !switch.name.trim().is_empty()
+                    && names
+                        .iter()
+                        .any(|name| name.trim().eq_ignore_ascii_case(switch.name.trim()))
+            })
             .or_else(|| {
                 self.switches
                     .iter()
                     .enumerate()
-                    .map(|(index, switch)| (index, horizontal(self.nodes[switch.node as usize].pos - pos).length()))
+                    .map(|(index, switch)| {
+                        (
+                            index,
+                            horizontal(self.nodes[switch.node as usize].pos - pos).length(),
+                        )
+                    })
                     .filter(|(_, distance)| *distance < 40.0)
                     .min_by(|left, right| left.1.total_cmp(&right.1))
                     .map(|(index, _)| index)
@@ -927,7 +1165,11 @@ impl WireNet {
         let dynamic = self.dynamic.lock().unwrap();
         let branch = *dynamic.branch.get(sw)?;
         let right = branch == switch.branch_right;
-        Some((if right { 2.0 } else { 1.0 }, if branch { 0.0 } else { 1.0 }, dynamic.since[sw]))
+        Some((
+            if right { 2.0 } else { 1.0 },
+            if branch { 0.0 } else { 1.0 },
+            dynamic.since[sw],
+        ))
     }
 
     /// A shoe passes the contact plate of a switch: the position the vehicle asks for, if the
@@ -936,7 +1178,9 @@ impl WireNet {
         if self.switches[sw].mode == SwitchMode::Radio {
             return false;
         }
-        let Some(want) = self.switches[sw].wanted(request) else { return false };
+        let Some(want) = self.switches[sw].wanted(request) else {
+            return false;
+        };
         let mut d = self.dynamic.lock().unwrap();
         if d.lock[sw] > 0.0 {
             return false;
@@ -951,7 +1195,11 @@ impl WireNet {
         if let Some(si) = n.switch {
             let sw = &self.switches[si as usize];
             if from == sw.toe {
-                return Some(if self.switch_branch(si as usize) { sw.branch } else { sw.straight });
+                return Some(if self.switch_branch(si as usize) {
+                    sw.branch
+                } else {
+                    sw.straight
+                });
             }
             return Some(sw.toe);
         }
@@ -962,7 +1210,11 @@ impl WireNet {
             _ => {
                 // a crossing of lines: the shoe goes straight on
                 let d_in = -self.end_dir(from);
-                others.into_iter().max_by(|a, b| self.end_dir(*a).dot(d_in).total_cmp(&self.end_dir(*b).dot(d_in)))
+                others.into_iter().max_by(|a, b| {
+                    self.end_dir(*a)
+                        .dot(d_in)
+                        .total_cmp(&self.end_dir(*b).dot(d_in))
+                })
             }
         }
     }
@@ -984,7 +1236,13 @@ impl WireNet {
 
     /// Move a contact `dist` metres (>= 0) along the wire in direction `dir` (+1 towards the
     /// span's last point), through nodes. `info` collects what is passed on the way.
-    pub fn walk(&self, c: &mut Contact, dir: &mut i8, mut dist: f64, info: &mut WalkInfo) -> Result<(), WalkEnd> {
+    pub fn walk(
+        &self,
+        c: &mut Contact,
+        dir: &mut i8,
+        mut dist: f64,
+        info: &mut WalkInfo,
+    ) -> Result<(), WalkEnd> {
         let mut guard = 0;
         loop {
             guard += 1;
@@ -1000,7 +1258,9 @@ impl WireNet {
             }
             let end: u8 = if *dir > 0 { 1 } else { 0 };
             let travelled = if end == 1 { len - c.s } else { c.s };
-            info.kink = info.kink.max(self.kink_between(c.span, c.s, if end == 1 { len } else { 0.0 }));
+            info.kink =
+                info.kink
+                    .max(self.kink_between(c.span, c.s, if end == 1 { len } else { 0.0 }));
             dist = (dist - travelled).max(0.0);
             let node = self.spans[c.span as usize].ends[end as usize];
             let Some((ns, ne)) = self.exit_at(node, (c.span, end)) else {
@@ -1011,12 +1271,20 @@ impl WireNet {
             let d_in = -self.end_dir((c.span, end));
             let d_out = self.end_dir((ns, ne));
             info.kink = info.kink.max(d_in.dot(d_out).clamp(-1.0, 1.0).acos());
-            info.nodes.push(NodePass { node, from: (c.span, end), to: (ns, ne) });
+            info.nodes.push(NodePass {
+                node,
+                from: (c.span, end),
+                to: (ns, ne),
+            });
             if end == ne {
                 c.side ^= 1;
             }
             c.span = ns;
-            c.s = if ne == 0 { 0.0 } else { self.spans[ns as usize].len() };
+            c.s = if ne == 0 {
+                0.0
+            } else {
+                self.spans[ns as usize].len()
+            };
             *dir = if ne == 0 { 1 } else { -1 };
         }
     }
@@ -1055,10 +1323,17 @@ impl WireNet {
         }
     }
 
-
     /// The wire a ray (a player's line of sight) passes nearest within `max_miss` metres,
     /// among the wires within `reach` of a boom's hinge: its contact, its point and the miss.
-    pub fn aim_wire(&self, origin: DVec3, dir: DVec3, base: DVec3, reach: f64, side_for: &dyn Fn(DVec3) -> Option<u8>, max_miss: f64) -> Option<(Contact, DVec3, f64)> {
+    pub fn aim_wire(
+        &self,
+        origin: DVec3,
+        dir: DVec3,
+        base: DVec3,
+        reach: f64,
+        side_for: &dyn Fn(DVec3) -> Option<u8>,
+        max_miss: f64,
+    ) -> Option<(Contact, DVec3, f64)> {
         let dir = dir.normalize_or(DVec3::X);
         let mut best: Option<(Contact, DVec3, f64)> = None;
         for si in self.near(base, reach + 3.0) {
@@ -1077,7 +1352,15 @@ impl WireNet {
                     }
                     if best.as_ref().is_none_or(|x| miss < x.2) {
                         let s = sp.cum[i] + u * (sp.cum[i + 1] - sp.cum[i]);
-                        best = Some((Contact { span: si, s, side: sd }, p, miss));
+                        best = Some((
+                            Contact {
+                                span: si,
+                                s,
+                                side: sd,
+                            },
+                            p,
+                            miss,
+                        ));
                     }
                 }
             }
@@ -1111,7 +1394,11 @@ impl WireNet {
                 let mut best: Option<(f64, f64)> = None;
                 for i in 0..sp.pts.len() - 1 {
                     let (p0, p1) = (sp.pts[i], sp.pts[i + 1]);
-                    if q.x < p0.x.min(p1.x) - m || q.x > p0.x.max(p1.x) + m || q.y < p0.y.min(p1.y) - m || q.y > p0.y.max(p1.y) + m {
+                    if q.x < p0.x.min(p1.x) - m
+                        || q.x > p0.x.max(p1.x) + m
+                        || q.y < p0.y.min(p1.y) - m
+                        || q.y > p0.y.max(p1.y) + m
+                    {
                         continue;
                     }
                     let (a, b) = sp.wire_segment(i, side);
@@ -1142,7 +1429,11 @@ pub fn ray_segment(origin: DVec3, dir: DVec3, a: DVec3, b: DVec3) -> (f64, f64) 
     let (dd, de, ee) = (dir.dot(dir), dir.dot(e), e.dot(e).max(1e-12));
     let (dw, ew) = (dir.dot(w0), e.dot(w0));
     let den = dd * ee - de * de;
-    let mut u = if den.abs() > 1e-9 { (dd * ew - de * dw) / den } else { ew / ee };
+    let mut u = if den.abs() > 1e-9 {
+        (dd * ew - de * dw) / den
+    } else {
+        ew / ee
+    };
     u = u.clamp(0.0, 1.0);
     let t = ((de * u - dw) / dd).max(0.0);
     let u = ((origin + dir * t - a).dot(e) / ee).clamp(0.0, 1.0);
@@ -1176,325 +1467,4 @@ pub struct WalkInfo {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A straight line along x with a branch leaving to the left at x = 50.
-    pub(crate) fn y_net() -> WireNet {
-        WireNet::parse(
-            "[trolley_net]\nvoltage 600\n\
-             [trolley_section]\nid 1\nlive 1\n\
-             [trolley_span]\nsection 1\np 0 0 5.5\np 25 0 5.5\np 50 0 5.5\n\
-             [trolley_span]\nsection 1\np 50 0 5.5\np 75 0 5.5\np 100 0 5.5\n\
-             [trolley_span]\nsection 1\np 50 0 5.5\np 70 6 5.5\np 90 20 5.5\n\
-             [trolley_switch]\npos 50 0 5.5\nmode power\ntrigger 8\nsense 10\n",
-        )
-    }
-
-    /// A 0.8 m piece beside the frog (shorter than the joining distance) is closed over, not
-    /// joined to itself: the frog still has its three ends and the straight way runs through.
-    #[test]
-    fn a_stub_shorter_than_the_join_distance_does_not_break_the_frog() {
-        let n = WireNet::parse(
-            "[trolley_section]\nid 1\nlive 1\n\
-             [trolley_span]\nsection 1\np 0 0 5.5\np 25 0 5.5\np 50 0 5.5\n\
-             [trolley_span]\nsection 1\np 50 0 5.5\np 50.8 0 5.5\n\
-             [trolley_span]\nsection 1\np 50.8 0 5.5\np 75 0 5.5\np 100 0 5.5\n\
-             [trolley_span]\nsection 1\np 50 0 5.5\np 70 6 5.5\np 90 20 5.5\n\
-             [trolley_switch]\npos 50 0 5.5\nmode fixed\n",
-        );
-        assert_eq!(n.spans.len(), 3, "the stub is dropped");
-        assert_eq!(n.switches.len(), 1);
-        assert!(n.spans.iter().all(|s| s.len() > 1.0));
-    }
-
-    /// A piece longer than twice the joining distance whose ends curl close together keeps its
-    /// two ends apart: they are two nodes, and the neighbours at the first end meet there.
-    #[test]
-    fn a_curled_piece_does_not_join_its_own_two_ends() {
-        let n = WireNet::parse(
-            "[trolley_section]\nid 1\nlive 1\n\
-             [trolley_span]\nsection 1\np 0 0 5.5\np 20 0 5.5\n\
-             [trolley_span]\nsection 1\np 20 0 5.5\np 22 1.5 5.5\np 22.5 4 5.5\np 21 5 5.5\np 20.6 0.8 5.5\n\
-             [trolley_span]\nsection 1\np 20.6 0.8 5.5\np 40 0 5.5\n",
-        );
-        let curl = &n.spans[1];
-        assert_ne!(curl.ends[0], curl.ends[1], "both ends in one node");
-        assert!(curl.len() > 4.0);
-    }
-
-    #[test]
-    fn spans_join_into_nodes_and_a_switch() {
-        let n = y_net();
-        assert_eq!(n.spans.len(), 3);
-        assert_eq!(n.switches.len(), 1);
-        let sw = &n.switches[0];
-        assert_eq!(sw.toe.0, 0);
-        assert_eq!(sw.straight.0, 1);
-        assert_eq!(sw.branch.0, 2);
-        // the branch leaves to the left (north) of a vehicle heading east
-        assert!(!sw.branch_right);
-    }
-
-    #[test]
-    fn a_shoe_takes_the_branch_the_switch_is_set_to() {
-        let n = y_net();
-        let mut dir = 1i8;
-        let mut c = Contact { span: 0, s: 40.0, side: 0 };
-        let mut info = WalkInfo::default();
-        n.walk(&mut c, &mut dir, 20.0, &mut info).unwrap();
-        assert_eq!(c.span, 1);
-        assert!((c.s - 10.0).abs() < 1e-9);
-        n.set_switch(0, true);
-        let mut c = Contact { span: 0, s: 40.0, side: 0 };
-        let mut dir = 1i8;
-        n.walk(&mut c, &mut dir, 20.0, &mut WalkInfo::default()).unwrap();
-        assert_eq!(c.span, 2);
-        // the branch turns away from the main line: the walk saw a kink
-        let mut info = WalkInfo::default();
-        let mut c = Contact { span: 0, s: 40.0, side: 0 };
-        n.walk(&mut c, &mut 1i8.clone(), 20.0, &mut info).unwrap();
-        assert!(info.kink > 0.2, "{}", info.kink);
-    }
-
-    #[test]
-    fn the_end_of_a_wire_is_a_dead_end() {
-        let n = y_net();
-        let mut c = Contact { span: 1, s: 20.0, side: 0 };
-        let mut dir = 1i8;
-        assert!(n.walk(&mut c, &mut dir, 100.0, &mut WalkInfo::default()).is_err());
-    }
-
-    #[test]
-    fn trailing_through_the_frog_goes_to_the_toe_whatever_the_position() {
-        let n = y_net();
-        for branch in [false, true] {
-            n.set_switch(0, branch);
-            let mut c = Contact { span: 2, s: 5.0, side: 0 };
-            let mut dir = -1i8;
-            n.walk(&mut c, &mut dir, 10.0, &mut WalkInfo::default()).unwrap();
-            assert_eq!(c.span, 0);
-            assert_eq!(dir, -1);
-        }
-    }
-
-    #[test]
-    fn solving_the_tip_puts_it_a_boom_length_from_the_hinge() {
-        let n = y_net();
-        let base = DVec3::new(30.0, 0.0, 3.0);
-        let mut c = Contact { span: 0, s: 20.0, side: 0 };
-        n.solve_tip(&mut c, base, 6.5).unwrap();
-        let (p, _) = n.wire_point(&c);
-        assert!(((p - base).length() - 6.5).abs() < 1e-3);
-        // the pole trails behind the hinge: the contact is behind (west of) it
-        assert!(p.x < base.x);
-    }
-
-    #[test]
-    fn a_wire_too_far_cannot_be_reached() {
-        let n = y_net();
-        let base = DVec3::new(30.0, 0.0, -10.0);
-        let mut c = Contact { span: 0, s: 20.0, side: 0 };
-        assert!(n.solve_tip(&mut c, base, 6.5).is_err());
-    }
-
-    #[test]
-    fn dead_sections_and_insulator_gaps_carry_no_current() {
-        let n = WireNet::parse(
-            "[trolley_section]\nid 1\nlive 1\n[trolley_section]\nid 2\nlive 0\n\
-             [trolley_span]\nsection 1\np 0 0 5\np 20 0 5\n[trolley_span]\nsection 2\np 20 0 5\np 40 0 5\n",
-        );
-        assert_eq!(n.spans.len(), 2);
-        assert!(n.is_live(&Contact { span: 0, s: 10.0, side: 0 }));
-        assert!(!n.is_live(&Contact { span: 1, s: 10.0, side: 0 }));
-        // the stretch around the insulator is dead even on the live side
-        assert!(!n.is_live(&Contact { span: 0, s: 19.8, side: 0 }));
-        assert!(n.is_live(&Contact { span: 0, s: 19.0, side: 0 }));
-    }
-
-    #[test]
-    fn power_sensed_switch_follows_the_current() {
-        let n = y_net();
-        let amps = |current: f32| SwitchRequest { current, ..Default::default() };
-        assert!(n.trigger_switch(0, &amps(80.0)));
-        assert!(n.switch_branch(0));
-        // held while the vehicle passes
-        assert!(!n.trigger_switch(0, &amps(0.0)));
-        assert!(n.switch_branch(0));
-        n.end_step(3.0);
-        assert!(n.trigger_switch(0, &amps(0.0)));
-        assert!(!n.switch_branch(0));
-    }
-
-    pub(super) fn radio_net(extra: &str) -> WireNet {
-        let text = format!(
-            "[trolley_section]\nid 1\nlive 1\n\
-             [trolley_span]\nsection 1\np 0 0 5.5\np 25 0 5.5\np 50 0 5.5\n\
-             [trolley_span]\nsection 1\np 50 0 5.5\np 75 0 5.5\np 100 0 5.5\n\
-             [trolley_span]\nsection 1\np 50 0 5.5\np 70 6 5.5\np 90 20 5.5\n\
-             [trolley_switch]\npos 50 0 5.5\nmode radio\ntrigger 8\n{extra}"
-        );
-        WireNet::parse(&text)
-    }
-
-    #[test]
-    fn radio_always_uses_range_and_never_accepts_a_contact_plate() {
-        let request = SwitchRequest { radio: -1, ..Default::default() };
-        let net = radio_net("");
-        assert_eq!(net.switches[0].radio_range, 150.0);
-        assert!(!net.trigger_switch(0, &request));
-        assert!(!net.switch_branch(0));
-        assert_eq!(net.receive_radio(DVec3::new(50.0, 0.0, 5.5), &request), 1);
-        let mut ranged = radio_net("range 150\n");
-        assert_eq!(ranged.switches[0].radio_range, 150.0);
-        for mode in [SwitchMode::Power, SwitchMode::Indicator, SwitchMode::Fixed] {
-            ranged.switches[0].mode = mode;
-            assert_eq!(ranged.receive_radio(DVec3::new(50.0, 0.0, 5.5), &request), 0);
-        }
-        assert_eq!(radio_net("range -10\n").switches[0].radio_range, 1.0);
-        assert_eq!(radio_net("range 0\n").switches[0].radio_range, 1.0);
-        assert_eq!(radio_net("range 5000\n").switches[0].radio_range, 1000.0);
-    }
-
-    #[test]
-    fn radio_receivers_use_horizontal_range_and_filter_channels() {
-        let net = radio_net("range 20\nchannel 3\n");
-        let request = SwitchRequest { radio: -1, channel: 3, ..Default::default() };
-        assert_eq!(net.receive_radio(DVec3::new(50.0, 20.01, 5.5), &request), 0);
-        assert_eq!(net.receive_radio(DVec3::new(50.0, 0.0, 5.5), &SwitchRequest { channel: 2, ..request }), 0);
-        assert!(!net.switch_branch(0));
-        assert_eq!(net.receive_radio(DVec3::new(50.0, 20.0, 100.0), &request), 1);
-        assert!(net.switch_branch(0));
-    }
-
-    #[test]
-    fn radio_receivers_change_immediately_and_keep_unknown_route_positions() {
-        let net = radio_net("range 20\nroute 1 left\nroute 2 right\n");
-        let pos = DVec3::new(50.0, 0.0, 5.5);
-        let left = SwitchRequest { code: 1, ..Default::default() };
-        let right = SwitchRequest { code: 2, ..Default::default() };
-        assert_eq!(net.receive_radio(pos, &left), 1);
-        assert_eq!(net.receive_radio(pos, &right), 1);
-        assert_eq!(net.switch_display(0), Some((2.0, 1.0, 0.0)));
-        assert_eq!(net.receive_radio(pos, &left), 1);
-        for _ in 0..30 {
-            assert_eq!(net.receive_radio(pos, &left), 0);
-            net.end_step(0.1);
-        }
-        assert_eq!(net.receive_radio(pos, &SwitchRequest { code: 999, ..Default::default() }), 0);
-        assert_eq!(net.receive_radio(pos, &right), 1);
-        assert!(!net.switch_branch(0));
-        assert_eq!(net.receive_radio(pos, &left), 1);
-    }
-
-    #[test]
-    fn a_radio_switch_takes_the_cabs_request_and_keeps_it() {
-        let n = radio_net("");
-        assert_eq!(n.switches[0].mode, SwitchMode::Radio);
-        assert!(!n.switches[0].branch_right, "the branch leaves to the left");
-        let radio = |radio: i8| SwitchRequest { radio, ..Default::default() };
-        // power and indicator do not set it
-        assert_eq!(n.receive_radio(DVec3::ZERO, &SwitchRequest { current: 300.0, blinker: -1, ..Default::default() }), 0);
-        assert_eq!(n.receive_radio(DVec3::ZERO, &radio(-1)), 1);
-        assert!(n.switch_branch(0));
-        n.end_step(3.0);
-        // no request: the next vehicle finds it as it was left
-        assert_eq!(n.receive_radio(DVec3::ZERO, &radio(0)), 0);
-        assert!(n.switch_branch(0));
-        assert_eq!(n.receive_radio(DVec3::ZERO, &radio(1)), 1);
-        assert!(!n.switch_branch(0));
-    }
-
-    #[test]
-    fn displays_bind_by_name_before_distance_and_have_a_limited_fallback() {
-        let net = radio_net("name Junction A\n");
-        assert_eq!(net.switch_for_display(DVec3::ZERO, &[" junction a ".into()]), Some(0));
-        assert_eq!(net.switch_for_display(DVec3::new(50.0, 10.0, 20.0), &[]), Some(0));
-        assert_eq!(net.switch_for_display(DVec3::new(50.0, 40.0, 5.5), &[]), None);
-        assert_eq!(net.switch_display(99), None);
-    }
-
-    #[test]
-    fn displays_show_actual_direction_and_time_since_a_change() {
-        let mut net = radio_net("");
-        assert_eq!(net.switch_display(0), Some((2.0, 1.0, 1.0e6)));
-        assert_eq!(net.receive_radio(DVec3::ZERO, &SwitchRequest { radio: -1, ..Default::default() }), 1);
-        assert_eq!(net.switch_display(0), Some((1.0, 0.0, 0.0)));
-        net.end_step(1.0);
-        assert_eq!(net.switch_display(0), Some((1.0, 0.0, 0.0)));
-        net.step_switch_displays(1.0);
-        assert_eq!(net.receive_radio(DVec3::ZERO, &SwitchRequest { radio: -1, ..Default::default() }), 0);
-        assert_eq!(net.switch_display(0), Some((1.0, 0.0, 1.0)));
-        net.set_switch(0, true);
-        assert_eq!(net.switch_display(0), Some((1.0, 0.0, 1.0)));
-        net.set_switch(0, false);
-        assert_eq!(net.switch_display(0), Some((2.0, 1.0, 0.0)));
-        net.switches[0].branch_right = true;
-        assert_eq!(net.switch_display(0), Some((1.0, 1.0, 0.0)));
-        net.set_switch(0, true);
-        assert_eq!(net.switch_display(0), Some((2.0, 0.0, 0.0)));
-    }
-
-    #[test]
-    fn route_codes_set_a_radio_switch_and_the_cabs_request_overrides_them() {
-        let n = radio_net("route 158 branch\nroute 160 straight\nroute 7 right\n");
-        assert_eq!(n.switches[0].routes, vec![(158, SwitchWay::Branch), (160, SwitchWay::Straight), (7, SwitchWay::Right)]);
-        let code = |code: u32| SwitchRequest { code, ..Default::default() };
-        assert_eq!(n.receive_radio(DVec3::ZERO, &code(158)), 1);
-        assert!(n.switch_branch(0));
-        n.end_step(3.0);
-        assert_eq!(n.receive_radio(DVec3::ZERO, &code(160)), 1);
-        assert!(!n.switch_branch(0));
-        n.end_step(3.0);
-        // a code it does not know leaves it alone; right is the straight way here
-        assert_eq!(n.receive_radio(DVec3::ZERO, &code(999)), 0);
-        assert_eq!(n.receive_radio(DVec3::ZERO, &code(7)), 0);
-        n.end_step(3.0);
-        assert_eq!(n.receive_radio(DVec3::ZERO, &SwitchRequest { radio: -1, code: 160, ..Default::default() }), 1);
-        assert!(n.switch_branch(0));
-    }
-
-    #[test]
-    fn the_map_chooses_only_the_overhead_lines_sounds() {
-        let n = WireNet::parse("[trolley_sounds]\nhiss off\nsnap off\nfrog sounds/frog clatter.wav\nclick off\n[trolley_span]\np 0 0 5\np 50 0 5\n");
-        assert_eq!(n.sounds, WireSounds { frog: SoundChoice::File("sounds/frog clatter.wav".into()), switch: SoundChoice::Off });
-        assert_eq!(n.spans.len(), 1);
-    }
-
-    #[test]
-    fn switch_sound_is_map_defined_and_only_queued_when_the_frog_moves() {
-        let net = radio_net("channel 1\n[trolley_sounds]\nswitch sounds/switch.wav\n");
-        assert_eq!(net.sounds.switch, SoundChoice::File("sounds/switch.wav".into()));
-        assert!(net.take_switch_sounds().is_empty());
-        let request = SwitchRequest { radio: -1, channel: 1, ..Default::default() };
-        assert_eq!(net.receive_radio(DVec3::ZERO, &request), 1);
-        assert_eq!(net.take_switch_sounds(), vec![net.nodes[net.switches[0].node as usize].pos]);
-        assert_eq!(net.receive_radio(DVec3::ZERO, &request), 0);
-        assert_eq!(net.receive_radio(DVec3::ZERO, &SwitchRequest { radio: 1, channel: 2, ..Default::default() }), 0);
-        assert!(net.take_switch_sounds().is_empty());
-        net.set_switch(0, false);
-        net.set_switch(0, false);
-        assert_eq!(net.take_switch_sounds().len(), 1);
-        for index in 0..300 {
-            net.set_switch(0, index % 2 == 0);
-        }
-        assert_eq!(net.take_switch_sounds().len(), 256);
-    }
-
-    #[test]
-    fn a_radio_switch_on_a_channel_hears_only_that_channel() {
-        let n = radio_net("channel 3\n");
-        assert_eq!(n.switches[0].channel, Some(3));
-        assert_eq!(n.receive_radio(DVec3::ZERO, &SwitchRequest { radio: -1, channel: 1, ..Default::default() }), 0);
-        assert_eq!(n.receive_radio(DVec3::ZERO, &SwitchRequest { radio: -1, channel: 3, ..Default::default() }), 1);
-    }
-
-    #[test]
-    fn voltage_sags_with_the_current_drawn() {
-        let n = y_net();
-        let v0 = n.section_volts(0, 0.0);
-        let v1 = n.section_volts(0, 300.0);
-        assert!(v1 < v0 && v0 <= 600.0);
-        assert!((v0 - v1 - 300.0 * 0.05).abs() < 1e-3);
-    }
-}
+mod tests;
