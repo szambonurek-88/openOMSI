@@ -76,6 +76,12 @@ pub struct SoundEntry {
     pub only_one: bool,
     /// `[next_random]`: (count, min, max) applied to this entry.
     pub random: Option<(i32, f32, f32)>,
+    /// `[traction]`: this is a traction sound - the motor's loops of an electric bus, a
+    /// tram's or a trolleybus's (openOMSI's own keyword; OMSI 2 has none and ignores the
+    /// line). The settings' traction slider scales these and only these (#3336). A vehicle
+    /// file that marks none of its entries has its traction sounds guessed by their file
+    /// names (see `omsi_audio::soundset`).
+    pub traction: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -127,7 +133,10 @@ impl SoundCfg {
             })
             .cloned()
             .collect();
-        SoundCfg { sounds, unknown_keywords: self.unknown_keywords.clone() }
+        SoundCfg {
+            sounds,
+            unknown_keywords: self.unknown_keywords.clone(),
+        }
     }
 
     pub fn load(path: &Path) -> Result<SoundCfg, omsi_cfg::CfgError> {
@@ -144,7 +153,12 @@ impl SoundCfg {
                 "sound" => {
                     let file = r.str().to_string();
                     let volume = r.f32();
-                    c.sounds.push(SoundEntry { file, volume, random: pending_random.take(), ..Default::default() });
+                    c.sounds.push(SoundEntry {
+                        file,
+                        volume,
+                        random: pending_random.take(),
+                        ..Default::default()
+                    });
                 }
                 "loopsound" => {
                     // file, sample rate, pitch variable, its reference value, volume: the
@@ -155,7 +169,16 @@ impl SoundCfg {
                     let pitch_variable = r.str().to_string();
                     let pitch_ref = r.f32();
                     let volume = r.f32();
-                    c.sounds.push(SoundEntry { file, volume, is_loop: true, sample_rate, pitch_variable, pitch_ref, random: pending_random.take(), ..Default::default() });
+                    c.sounds.push(SoundEntry {
+                        file,
+                        volume,
+                        is_loop: true,
+                        sample_rate,
+                        pitch_variable,
+                        pitch_ref,
+                        random: pending_random.take(),
+                        ..Default::default()
+                    });
                 }
                 "next_random" => {
                     let n = r.i32();
@@ -196,7 +219,10 @@ impl SoundCfg {
                 "volcurve" => {
                     let v = r.str().to_string();
                     if let Some(s) = c.sounds.last_mut() {
-                        s.vol_curves.push(VolCurve { variable: v, points: Vec::new() });
+                        s.vol_curves.push(VolCurve {
+                            variable: v,
+                            points: Vec::new(),
+                        });
                     }
                 }
                 "pnt" => {
@@ -214,10 +240,23 @@ impl SoundCfg {
                         _ => ConditionKind::Single,
                     };
                     // (an int's value is StrToInt, a bool's StrToInt = 1; a bool has no relation)
-                    let value = if kind == ConditionKind::Single { r.f32() } else { r.str().trim().parse::<i32>().unwrap_or(0) as f32 };
-                    let relation = if kind == ConditionKind::Bool { 1 } else { r.f32() as i32 };
+                    let value = if kind == ConditionKind::Single {
+                        r.f32()
+                    } else {
+                        r.str().trim().parse::<i32>().unwrap_or(0) as f32
+                    };
+                    let relation = if kind == ConditionKind::Bool {
+                        1
+                    } else {
+                        r.f32() as i32
+                    };
                     if let Some(s) = c.sounds.last_mut() {
-                        s.conditions.push(Condition { variable, value, relation, kind });
+                        s.conditions.push(Condition {
+                            variable,
+                            value,
+                            relation,
+                            kind,
+                        });
                     }
                 }
                 "trigger" => {
@@ -234,6 +273,13 @@ impl SoundCfg {
                 "onlyone" => {
                     if let Some(s) = c.sounds.last_mut() {
                         s.only_one = true;
+                    }
+                }
+                // (openOMSI's own: the motor of an electric bus, a tram, a trolleybus - the
+                // settings' traction volume scales it, #3336)
+                "traction" => {
+                    if let Some(s) = c.sounds.last_mut() {
+                        s.traction = true;
                     }
                 }
                 _ => c.unknown_keywords.push((k, r.block_line())),
@@ -275,24 +321,62 @@ mod tests {
         assert!(conds[2].holds(0.5) && !conds[2].holds(0.50001));
     }
 
+    /// `[traction]` marks the entry before it (openOMSI's own keyword, #3336): the motor's
+    /// loops of an electric bus, a tram, a trolleybus - and only that entry.
+    #[test]
+    fn the_traction_keyword_marks_the_entry_before_it() {
+        let text = "[loopsound]\nmotor_loop.wav\n44100\nengine_n\n600\n1\n[traction]\n\n[sound]\ndoor.wav\n1\n\n[loopsound]\nfan.wav\n44100\nfan_n\n600\n1\n";
+        let c = SoundCfg::parse(&CfgFile::from_str("sound.cfg", text));
+        assert_eq!(c.sounds.len(), 3);
+        assert!(c.sounds[0].traction, "the motor");
+        assert!(
+            !c.sounds[1].traction && !c.sounds[2].traction,
+            "and nothing else"
+        );
+        // (a file without the keyword marks nothing: `soundset` guesses by the file names)
+        let plain = SoundCfg::parse(&CfgFile::from_str("sound.cfg", "[sound]\na.wav\n1\n"));
+        assert!(!plain.sounds[0].traction);
+        assert!(
+            !plain.unknown_keywords.iter().any(|(k, _)| k == "traction"),
+            "the keyword is known"
+        );
+    }
+
     #[test]
     fn number_specific_random_is_stable_and_spread() {
         for n in [0, 6, 8, 16, 29] {
             let a = spec_random("3261", n);
             assert!((0.0..1.0).contains(&a));
-            assert_eq!(a, spec_random("3261", n), "the same number gives the same value");
+            assert_eq!(
+                a,
+                spec_random("3261", n),
+                "the same number gives the same value"
+            );
         }
         // different numbers give different buses
-        let v: Vec<f32> = (3000..3040).map(|k| spec_random(&k.to_string(), 8)).collect();
+        let v: Vec<f32> = (3000..3040)
+            .map(|k| spec_random(&k.to_string(), 8))
+            .collect();
         let below = v.iter().filter(|x| **x < 0.4).count();
         assert!(below > 4 && below < 36, "{below} of 40 below 0.4");
     }
 
     #[test]
     fn next_random_keeps_an_entry_for_some_numbers_only() {
-        let cfg = SoundCfg::parse(&CfgFile::from_str("t.cfg", "[next_random]\n8\n0.0\n0.4\n[loopsound]\nrattle.wav\n32000\nengine_n\n497\n0.7\n\n[sound]\nhorn.wav\n1\n"));
-        assert_eq!(cfg.sounds[0].volume, 0.7, "the fifth line of [loopsound] is its volume");
-        let kept: usize = (3000..3040).map(|k| cfg.chosen_for(&k.to_string()).sounds.len()).sum();
-        assert!(kept > 40 && kept < 80, "the horn always, the rattle on some buses: {kept}");
+        let cfg = SoundCfg::parse(&CfgFile::from_str(
+            "t.cfg",
+            "[next_random]\n8\n0.0\n0.4\n[loopsound]\nrattle.wav\n32000\nengine_n\n497\n0.7\n\n[sound]\nhorn.wav\n1\n",
+        ));
+        assert_eq!(
+            cfg.sounds[0].volume, 0.7,
+            "the fifth line of [loopsound] is its volume"
+        );
+        let kept: usize = (3000..3040)
+            .map(|k| cfg.chosen_for(&k.to_string()).sounds.len())
+            .sum();
+        assert!(
+            kept > 40 && kept < 80,
+            "the horn always, the rattle on some buses: {kept}"
+        );
     }
 }
