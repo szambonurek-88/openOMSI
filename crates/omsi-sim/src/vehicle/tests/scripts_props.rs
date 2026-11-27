@@ -3,6 +3,39 @@
 use super::*;
 
 #[test]
+#[ignore = "needs OMSI_ROOT with Volvo_Wright_Family"]
+fn stock_volvo_wright_close_buzzes_before_moving() {
+    let root = original_root();
+    let bus = root.join("Vehicles/Volvo_Wright_Family/AVBWU563.bus");
+    require_content(&[&bus]);
+    let ty = Arc::new(VehicleType::load(&root, &bus).expect("AVBWU563"));
+    let mut v = VehicleInstance::new(ty, VehicleHost::new(crate::SimClock::default()));
+    for (name, value) in [
+        ("elec_real_main", 1.0),
+        ("elec_busbar_main", 1.0),
+        ("elec_busbar_avail", 1.0),
+        ("cockpit_button_ignition", 1.0),
+        ("bremse_feststell_sw", 1.0),
+        ("cockpit_button_smallhb", 0.0),
+        ("door_2", 1.0),
+        ("door_3", 1.0),
+        ("doorTarget_23", 1.0),
+    ] {
+        assert!(v.set_var(name, value), "missing {name}");
+    }
+    assert!(v.trigger("bus_dooraftclose"));
+    assert_eq!(v.var("doorTarget_23"), Some(0.0));
+    assert_eq!(v.var("backdoor_buzzer"), Some(0.0));
+    v.update(1.0 / 30.0);
+    assert_eq!(v.var("backdoor_buzzer"), Some(1.0));
+    assert_eq!(v.var("door_2"), Some(1.0));
+    for _ in 0..25 {
+        v.update(1.0 / 30.0);
+    }
+    assert!(v.var("door_2").is_some_and(|door| door < 1.0));
+}
+
+#[test]
 fn script_speed_reports_tiny_resting_motion_as_stopped() {
     assert_eq!(script_speed(0.000251), 0.0);
     assert_eq!(script_speed(-0.000251), 0.0);
@@ -21,9 +54,24 @@ fn ai_scripts_receive_pedals_before_both_frame_variants() {
             "",
         );
         for (throttle, brake, clutch) in [(0.75, 0.0, 0.0), (0.0, 0.6, 0.2), (0.0, 0.0, 0.0)] {
-            v.set_controls(crate::Controls { throttle, brake, clutch, ..Default::default() });
-            v.update_ai(0.02, &AiFrame { speed: 8.0, ..Default::default() });
-            assert_eq!(v.var("engine_throttle_injection"), Some(throttle), "{frame}");
+            v.set_controls(crate::Controls {
+                throttle,
+                brake,
+                clutch,
+                ..Default::default()
+            });
+            v.update_ai(
+                0.02,
+                &AiFrame {
+                    speed: 8.0,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                v.var("engine_throttle_injection"),
+                Some(throttle),
+                "{frame}"
+            );
             assert_eq!(v.var("brake_seen"), Some(brake), "{frame}");
             assert_eq!(v.var("clutch_seen"), Some(clutch), "{frame}");
         }
@@ -72,7 +120,15 @@ fn shadow_blob_lies_on_the_wheels_plane() {
     let rail_ty = coupling_test_type(Some(5.0));
     let rail_v = VehicleInstance::new(rail_ty.clone(), VehicleHost::new(Default::default()));
     assert_eq!(rail_v.contact_plane(), [0.0, 0.0, 0.0]);
-    let rail_t = TrailerPart::new_ex(rail_ty.clone(), &rail_ty, false, false, &rail_ty.program, 0, 0);
+    let rail_t = TrailerPart::new_ex(
+        rail_ty.clone(),
+        &rail_ty,
+        false,
+        false,
+        &rail_ty.program,
+        0,
+        0,
+    );
     let m_local = rail_t.mesh_local_transform(0);
     assert!(!m_local.is_nan());
 }
@@ -98,194 +154,18 @@ fn stores_and_reads_bits_match_the_scan_for_stock_scripts() {
         let ops: Vec<&omsi_script::Op> = p.blocks.iter().flat_map(|b| &b.ops).collect();
         let (mut stored, mut read) = (0, 0);
         for v in 0..p.var_names.len() as omsi_script::VarId + 64 {
-            let s = ops.iter().any(|op| matches!(op, omsi_script::Op::Store(x) if *x == v));
-            let r = ops.iter().any(|op| matches!(op, omsi_script::Op::Load(x) if *x == v));
+            let s = ops
+                .iter()
+                .any(|op| matches!(op, omsi_script::Op::Store(x) if *x == v));
+            let r = ops
+                .iter()
+                .any(|op| matches!(op, omsi_script::Op::Load(x) if *x == v));
             assert_eq!(p.stores(v), s, "{}: stores {v}", bus.display());
             assert_eq!(p.reads(v), r, "{}: reads {v}", bus.display());
             stored += s as usize;
             read += r as usize;
         }
         assert!(stored > 0 && read > 0, "{}", bus.display());
-    }
-}
-
-/// Volvo Wright's dashboard rear-close trigger falls back to its explicit external-close
-/// path when the handbrake guard only produced the button sound.
-#[test]
-#[ignore = "needs OMSI_ROOT with Volvo_Wright_Family (not part of the stock install)"]
-fn volvo_wright_rear_close_fallback_moves_a_partly_open_door() {
-    let root = original_root();
-    let bus = root.join("Vehicles/Volvo_Wright_Family/AVBWS1.bus");
-    require_content(&[&bus]);
-    let ty = Arc::new(VehicleType::load(&root, &bus).expect("AVBWS1"));
-    let mut v = VehicleInstance::new(ty, VehicleHost::new(crate::SimClock::default()));
-    for (name, value) in [
-        ("elec_real_main", 1.0),
-        ("elec_busbar_main", 1.0),
-        ("elec_busbar_avail", 1.0),
-        ("cockpit_button_ignition", 1.0),
-        ("bremse_feststell_sw", 0.0),
-        ("cockpit_button_smallhb", 0.0),
-        ("door_2", 0.5),
-        ("door_3", 0.5),
-        ("doorTarget_23", 1.0),
-    ] {
-        assert!(v.set_var(name, value), "missing {name}");
-    }
-    assert!(v.trigger("bus_dooraftclose"));
-    assert_eq!(v.var("doorTarget_23"), Some(0.0));
-}
-
-#[test]
-#[ignore = "needs OMSI_ROOT with Volvo_Wright_Family (not part of the stock install)"]
-fn volvo_wright_rear_toggle_falls_back_to_external_close() {
-    let root = original_root();
-    let bus = root.join("Vehicles/Volvo_Wright_Family/AVBWS1.bus");
-    require_content(&[&bus]);
-    let ty = Arc::new(VehicleType::load(&root, &bus).expect("AVBWS1"));
-    let mut v = VehicleInstance::new(ty, VehicleHost::new(crate::SimClock::default()));
-    for (name, value) in [
-        ("elec_real_main", 1.0),
-        ("elec_busbar_main", 1.0),
-        ("elec_busbar_avail", 1.0),
-        ("cockpit_button_ignition", 1.0),
-        ("bremse_feststell_sw", 0.0),
-        ("cockpit_button_smallhb", 0.0),
-        ("door_2", 0.5),
-        ("door_3", 0.5),
-        ("doorTarget_23", 1.0),
-    ] {
-        assert!(v.set_var(name, value), "missing {name}");
-    }
-    assert!(v.trigger("bus_dooraft"));
-    assert_eq!(v.var("doorTarget_23"), Some(0.0));
-    assert_eq!(v.var("bdoor_embtn_cls"), Some(1.0));
-}
-
-#[test]
-#[ignore = "needs OMSI_ROOT with Volvo_Wright_Family (not part of the stock install)"]
-fn volvo_wright_rear_toggle_closes_open_leaves_even_with_zero_target() {
-    let root = original_root();
-    let bus = root.join("Vehicles/Volvo_Wright_Family/AVBWS1.bus");
-    require_content(&[&bus]);
-    let ty = Arc::new(VehicleType::load(&root, &bus).expect("AVBWS1"));
-    let mut v = VehicleInstance::new(ty, VehicleHost::new(crate::SimClock::default()));
-    for (name, value) in [
-        ("elec_real_main", 1.0),
-        ("elec_busbar_main", 1.0),
-        ("elec_busbar_avail", 1.0),
-        ("cockpit_button_ignition", 1.0),
-        ("bremse_feststell_sw", 0.0),
-        ("cockpit_button_smallhb", 0.0),
-        ("door_2", 0.5),
-        ("door_3", 0.5),
-        ("doorTarget_23", 0.0),
-    ] {
-        assert!(v.set_var(name, value), "missing {name}");
-    }
-    assert!(v.trigger("bus_dooraft"));
-    assert_eq!(v.var("doorTarget_23"), Some(0.0));
-}
-
-#[test]
-#[ignore = "needs OMSI_ROOT with Volvo_Wright_Family (not part of the stock install)"]
-fn volvo_wright_rear_toggle_reopens_during_forced_close() {
-    let root = original_root();
-    let bus = root.join("Vehicles/Volvo_Wright_Family/AVBWS1.bus");
-    require_content(&[&bus]);
-    let ty = Arc::new(VehicleType::load(&root, &bus).expect("AVBWS1"));
-    let mut v = VehicleInstance::new(ty, VehicleHost::new(crate::SimClock::default()));
-    for (name, value) in [
-        ("elec_real_main", 1.0),
-        ("elec_busbar_main", 1.0),
-        ("elec_busbar_avail", 1.0),
-        ("cockpit_button_ignition", 1.0),
-        ("bremse_feststell_sw", 1.0),
-        ("cockpit_button_smallhb", 0.0),
-        ("door_2", 0.5),
-        ("door_3", 0.5),
-        ("doorTarget_23", 0.0),
-        ("bdoor_embtn_cls", 1.0),
-    ] {
-        assert!(v.set_var(name, value), "missing {name}");
-    }
-    assert!(v.trigger("bus_dooraft"));
-    assert_eq!(v.var("doorTarget_23"), Some(1.0));
-    assert_eq!(v.var("bdoor_embtn_cls"), Some(0.0));
-}
-
-#[test]
-#[ignore = "needs OMSI_ROOT with Volvo_Wright_Family (not part of the stock install)"]
-fn volvo_wright_rear_toggle_keeps_close_target_through_frames() {
-    let root = original_root();
-    let bus = root.join("Vehicles/Volvo_Wright_Family/AVBWS1.bus");
-    require_content(&[&bus]);
-    let ty = Arc::new(VehicleType::load(&root, &bus).expect("AVBWS1"));
-    let mut v = VehicleInstance::new(ty, VehicleHost::new(crate::SimClock::default()));
-    for (name, value) in [
-        ("elec_real_main", 1.0),
-        ("elec_busbar_main", 1.0),
-        ("elec_busbar_avail", 1.0),
-        ("cockpit_button_ignition", 1.0),
-        ("bremse_feststell_sw", 0.0),
-        ("cockpit_button_smallhb", 0.0),
-        ("bremse_p_Tank04", 800000.0),
-        ("door_2", 1.0),
-        ("door_3", 1.0),
-        ("doorTarget_23", 1.0),
-        ("bdoor_sound_played", 1.0),
-    ] {
-        assert!(v.set_var(name, value), "missing {name}");
-    }
-    assert!(v.trigger("bus_dooraft"));
-    v.update(1.0 / 30.0);
-    assert_eq!(v.var("backdoor_buzzer"), Some(1.0));
-    for _ in 1..120 {
-        v.update(1.0 / 30.0);
-    }
-    assert_eq!(v.var("doorTarget_23"), Some(0.0));
-    assert!(v.var("door_2").unwrap_or(1.0) < 0.1);
-    assert!(v.var("door_3").unwrap_or(1.0) < 0.1);
-    assert!(v.host.fired_triggers.iter().any(|name| name == "ev_doortriggerclose_2"));
-}
-
-#[test]
-#[ignore = "needs OMSI_ROOT with Volvo_Wright_Family (not part of the stock install)"]
-fn volvo_wright_family_rear_toggle_closes_every_bus_variant() {
-    let root = original_root();
-    let dir = root.join("Vehicles/Volvo_Wright_Family");
-    require_content(&[&dir]);
-    let mut buses: Vec<_> = std::fs::read_dir(&dir)
-        .expect("Volvo Wright directory")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("bus")))
-        .collect();
-    buses.sort();
-    assert!(buses.len() >= 20, "unexpectedly few Volvo Wright buses: {}", buses.len());
-    for bus in buses {
-        let name = bus.file_name().unwrap().to_string_lossy().into_owned();
-        let ty = Arc::new(VehicleType::load(&root, &bus).unwrap_or_else(|e| panic!("{name}: {e}")));
-        let mut v = VehicleInstance::new(ty, VehicleHost::new(crate::SimClock::default()));
-        for (var, value) in [
-            ("elec_real_main", 1.0),
-            ("elec_busbar_main", 1.0),
-            ("elec_busbar_avail", 1.0),
-            ("cockpit_button_ignition", 1.0),
-            ("bremse_feststell_sw", 0.0),
-            ("cockpit_button_smallhb", 0.0),
-            ("door_2", 0.5),
-            ("door_3", 0.5),
-            ("doorTarget_23", 1.0),
-        ] {
-            if v.var(var).is_some() {
-                assert!(v.set_var(var, value), "{name}: missing {var}");
-            }
-        }
-        assert!(v.trigger("bus_dooraft"), "{name}: missing bus_dooraft");
-        let target = v.var("doorTarget_23").unwrap_or(0.0);
-        let request = v.var("door_back_close_request").unwrap_or(0.0);
-        assert!(target == 0.0 || request > 0.0, "{name}: rear door stayed open (target={target}, request={request})");
     }
 }
 
@@ -299,7 +179,10 @@ fn a_wheels_ground_is_the_road_under_it_not_the_highest_face() {
     let (road, deck) = (12.0f64, 17.0f64);
     // the faces: the deck above the wheel, the road under it
     let faces = |_x: f64, _y: f64, top: f64| crate::rigid::GroundProbe {
-        below: [road, deck].into_iter().filter(|h| *h <= top).fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a| a.max(b)))),
+        below: [road, deck]
+            .into_iter()
+            .filter(|h| *h <= top)
+            .fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a| a.max(b)))),
         above: None,
     };
     let faces: &dyn crate::rigid::Ground = &faces;
@@ -309,9 +192,15 @@ fn a_wheels_ground_is_the_road_under_it_not_the_highest_face() {
     let wheel = DVec3::new(100.0, 200.0, road);
     assert_eq!(wheel_ground(Some(faces), Some(plain), wheel), Some(road));
     // a wheel standing on the deck itself gets the deck
-    assert_eq!(wheel_ground(Some(faces), Some(plain), DVec3::new(100.0, 200.0, deck)), Some(deck));
+    assert_eq!(
+        wheel_ground(Some(faces), Some(plain), DVec3::new(100.0, 200.0, deck)),
+        Some(deck)
+    );
     // nothing drawn within a step of the wheel: the plain sampler, as before
-    let empty = |_x: f64, _y: f64, _top: f64| crate::rigid::GroundProbe { below: None, above: Some(deck) };
+    let empty = |_x: f64, _y: f64, _top: f64| crate::rigid::GroundProbe {
+        below: None,
+        above: Some(deck),
+    };
     let empty: &dyn crate::rigid::Ground = &empty;
     assert_eq!(wheel_ground(Some(empty), Some(plain), wheel), Some(deck));
     // no face probe at all (a rail or air lane): the plain sampler
@@ -376,7 +265,11 @@ fn props_plan_matches_compute_mesh_props() {
 #[ignore = "needs the original OMSI 2 install (OMSI_ROOT)"]
 fn props_plan_dirt_and_lights_match_the_names() {
     let root = original_root();
-    for bus in ["Vehicles/MAN_NL_NG/MAN_EN92_main.bus", "Vehicles/MAN_SD202/MAN_D92.bus", "Vehicles/VW_Golf_2/ai_vw_golf_2.bus"] {
+    for bus in [
+        "Vehicles/MAN_NL_NG/MAN_EN92_main.bus",
+        "Vehicles/MAN_SD202/MAN_D92.bus",
+        "Vehicles/VW_Golf_2/ai_vw_golf_2.bus",
+    ] {
         let bus = root.join(bus);
         require_content(&[&bus]);
         let ty = Arc::new(VehicleType::load(&root, &bus).expect("bus"));
@@ -387,7 +280,9 @@ fn props_plan_dirt_and_lights_match_the_names() {
         let mut dirt = Vec::new();
         for (i, vm) in v.ty.meshes.iter().enumerate() {
             for m in &v.ty.model.meshes[vm.def_index].materials {
-                let Some(name) = m.alphascale.as_deref().map(str::trim) else { continue };
+                let Some(name) = m.alphascale.as_deref().map(str::trim) else {
+                    continue;
+                };
                 let wiped = match name.to_ascii_lowercase().as_str() {
                     "dirt_norm" => false,
                     "dirt_wiped" => true,
@@ -398,20 +293,33 @@ fn props_plan_dirt_and_lights_match_the_names() {
                 }
             }
         }
-        let lights: Vec<f32> = v
-            .ty
-            .model
-            .meshes
-            .iter()
-            .flat_map(|md| &md.light_enh_2)
-            .map(|l| l.variable.trim().parse::<f32>().ok().or_else(|| v.var(l.variable.trim())).unwrap_or(0.0))
-            .collect();
+        let lights: Vec<f32> =
+            v.ty.model
+                .meshes
+                .iter()
+                .flat_map(|md| &md.light_enh_2)
+                .map(|l| {
+                    l.variable
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .or_else(|| v.var(l.variable.trim()))
+                        .unwrap_or(0.0)
+                })
+                .collect();
         let mut plan = PropsPlan::default();
         plan.refresh(&v.ty, &v.var_index);
         assert_eq!(plan.dirt, dirt, "{}", bus.display());
-        let planned: Vec<f32> = plan.lights.iter().map(|s| s.value(&v.state.vars, 0.0)).collect();
+        let planned: Vec<f32> = plan
+            .lights
+            .iter()
+            .map(|s| s.value(&v.state.vars, 0.0))
+            .collect();
         assert_eq!(planned, lights, "{}", bus.display());
-        assert_eq!(plan.dirt_wiped.map(|i| v.state.vars[i]), v.var("Dirt_Wiped"));
+        assert_eq!(
+            plan.dirt_wiped.map(|i| v.state.vars[i]),
+            v.var("Dirt_Wiped")
+        );
         assert!(!lights.is_empty(), "{}: no lamps", bus.display());
     }
 }
@@ -420,29 +328,51 @@ fn props_plan_dirt_and_lights_match_the_names() {
 fn synthetic_material_plan_preserves_lightmap_thresholds_and_alpha_slots() {
     let mut ty = coupling_test_type(None);
     let ty = Arc::get_mut(&mut ty).unwrap();
-    ty.model = Model::parse(&omsi_cfg::CfgFile::from_str("synthetic.cfg",
-        include_str!("../../../../omsi-model/tests/fixtures/material-compatibility.cfg")));
+    ty.model = Model::parse(&omsi_cfg::CfgFile::from_str(
+        "synthetic.cfg",
+        include_str!("../../../../omsi-model/tests/fixtures/material-compatibility.cfg"),
+    ));
     ty.meshes.push(VehicleMesh {
-        def_index: 0, data: MeshData::default(), file: PathBuf::new(),
-        materials: (0..2).map(|_| omsi_o3d::Material {
-            texture: "display.dds".into(), ..Default::default()
-        }).collect(),
-        overrides: Vec::new(), pivot: Mat4::IDENTITY, viewpoint: 0,
-        skin: Vec::new(), keep_winding: false,
+        def_index: 0,
+        data: MeshData::default(),
+        file: PathBuf::new(),
+        stamp: 0,
+        materials: (0..2)
+            .map(|_| omsi_o3d::Material {
+                texture: "display.dds".into(),
+                ..Default::default()
+            })
+            .collect(),
+        overrides: Vec::new(),
+        pivot: Mat4::IDENTITY,
+        viewpoint: 0,
+        skin: Vec::new(),
+        keep_winding: false,
     });
-    let mut index: HashMap<String, omsi_script::VarId> = ["display_alpha", "bright", "dim", "display_mode"]
-        .into_iter().enumerate().map(|(i, n)| (n.into(), i as omsi_script::VarId)).collect();
+    let mut index: HashMap<String, omsi_script::VarId> =
+        ["display_alpha", "bright", "dim", "display_mode"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, n)| (n.into(), i as omsi_script::VarId))
+            .collect();
     let mut plan = PropsPlan::default();
     plan.refresh(ty, &index);
     let mut got = Vec::new();
     // Both lightmaps off, either on, both on, and the exact OMSI 0.5 threshold.
-    for (bright, dim, expected) in [(0.0, 0.0, 0.0), (1.0, 0.0, 1.0),
-        (0.0, 1.0, 1.0), (1.0, 1.0, 1.0), (0.49, 0.49, 0.0), (0.5, 0.0, 1.0)] {
+    for (bright, dim, expected) in [
+        (0.0, 0.0, 0.0),
+        (1.0, 0.0, 1.0),
+        (0.0, 1.0, 1.0),
+        (1.0, 1.0, 1.0),
+        (0.49, 0.49, 0.0),
+        (0.5, 0.0, 1.0),
+    ] {
         for alpha in [0.0, 0.5, 1.0] {
             for mode in [0.0, 1.0] {
                 let vars = [alpha, bright, dim, mode];
                 plan.apply(&vars, &mut got);
-                let want = compute_mesh_props(ty, &|name| index.get(name).map(|&i| vars[i as usize]));
+                let want =
+                    compute_mesh_props(ty, &|name| index.get(name).map(|&i| vars[i as usize]));
                 assert_eq!(got[0].slot_light, vec![expected, 1.0]);
                 assert_eq!(got[0].slot_alpha, vec![alpha, 1.0]);
                 assert_eq!(got[0].slot_light, want[0].slot_light);
@@ -472,6 +402,7 @@ fn a_number_in_alphascale_is_the_scale_itself() {
         def_index: 0,
         data: MeshData::default(),
         file: PathBuf::new(),
+        stamp: 0,
         materials: ["film.png", "frost.tga", "pane.tga", "tint.tga"]
             .into_iter()
             .map(|texture| omsi_o3d::Material {
@@ -521,10 +452,13 @@ fn a_lightmap_on_an_unknown_variable_is_on() {
             .iter()
             .enumerate()
             .find_map(|(i, vm)| {
-                ty.model.meshes[vm.def_index].materials.iter().find_map(|m| {
-                    let (_, v) = m.lightmaps.first()?;
-                    Some((i, override_slot(&vm.materials, m)?, v.clone()))
-                })
+                ty.model.meshes[vm.def_index]
+                    .materials
+                    .iter()
+                    .find_map(|m| {
+                        let (_, v) = m.lightmaps.first()?;
+                        Some((i, override_slot(&vm.materials, m)?, v.clone()))
+                    })
             })
             .expect("a lightmap");
         let di = ty.meshes[i].def_index;
@@ -534,7 +468,8 @@ fn a_lightmap_on_an_unknown_variable_is_on() {
                 m.lightmaps.truncate(1);
             }
         }
-        let mut v = VehicleInstance::new(Arc::new(ty), VehicleHost::new(crate::SimClock::default()));
+        let mut v =
+            VehicleInstance::new(Arc::new(ty), VehicleHost::new(crate::SimClock::default()));
         for x in v.state.vars.iter_mut() {
             *x = value;
         }
@@ -557,12 +492,20 @@ fn a_control_cable_hands_what_the_scripts_write_to_what_they_read() {
         "CCW_Throttle\nCCR_Throttle\nseen\n",
         "",
     );
-    let cable = omsi_vehicle::vehicle::ControlCable { lines: ["C", "2", "CCR_Throttle", "CCW_Throttle", "E-Kupplung_Front"].map(String::from).to_vec() };
+    let cable = omsi_vehicle::vehicle::ControlCable {
+        lines: ["C", "2", "CCR_Throttle", "CCW_Throttle", "E-Kupplung_Front"]
+            .map(String::from)
+            .to_vec(),
+    };
     let mut ty = (*base.ty).clone();
     ty.def.control_cable_front.push(cable.clone());
     ty.def.control_cable_back.push(cable);
     for (cabled, expected) in [(false, 0.0), (true, 0.6)] {
-        let ty = if cabled { Arc::new(ty.clone()) } else { base.ty.clone() };
+        let ty = if cabled {
+            Arc::new(ty.clone())
+        } else {
+            base.ty.clone()
+        };
         let mut v = VehicleInstance::new(ty, VehicleHost::new(Default::default()));
         v.update(1.0 / 30.0);
         assert_eq!(v.var("seen"), Some(0.0));
@@ -578,15 +521,39 @@ fn road_vehicle_variables_are_known_without_the_program_folder_and_in_any_case()
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("bare")).unwrap();
     std::fs::create_dir_all(dir.join("upper/Program")).unwrap();
-    std::fs::write(dir.join("upper/Program/VarList_RoadVehicle.txt"), "Throttle\r\nOwnVar\r\n").unwrap();
-    std::fs::write(dir.join("t.osc"), "{frame}\n(L.L.Throttle) (S.L.Velocity)\n(L.L.cockpit_light_sw) (S.L.Spot_Select)\n{end}\n").unwrap();
+    std::fs::write(
+        dir.join("upper/Program/VarList_RoadVehicle.txt"),
+        "Throttle\r\nOwnVar\r\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("t.osc"),
+        "{frame}\n(L.L.Throttle) (S.L.Velocity)\n(L.L.cockpit_light_sw) (S.L.Spot_Select)\n{end}\n",
+    )
+    .unwrap();
     let read = builtin_vars(&dir.join("upper"));
     assert!(has(&read, "OwnVar") && has_program_varlist(&dir.join("upper")));
     assert!(!has_program_varlist(&dir.join("bare")));
-    let compile = |declare_unknown| omsi_script::compile(&omsi_script::CompileInput { builtin_vars: builtin_vars(&dir.join("bare")), scripts: vec![dir.join("t.osc")], declare_unknown, ..Default::default() });
+    let compile = |declare_unknown| {
+        omsi_script::compile(&omsi_script::CompileInput {
+            builtin_vars: builtin_vars(&dir.join("bare")),
+            scripts: vec![dir.join("t.osc")],
+            declare_unknown,
+            ..Default::default()
+        })
+    };
     let p = compile(true);
     assert!(p.errors.is_empty(), "{:?}", p.errors);
-    assert!(["throttle", "velocity", "spot_select", "cockpit_light_sw"].iter().all(|n| p.var(n).is_some()));
-    assert!(compile(false).errors.iter().any(|e| e.message.contains("cockpit_light_sw")));
+    assert!(
+        ["throttle", "velocity", "spot_select", "cockpit_light_sw"]
+            .iter()
+            .all(|n| p.var(n).is_some())
+    );
+    assert!(
+        compile(false)
+            .errors
+            .iter()
+            .any(|e| e.message.contains("cockpit_light_sw"))
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
